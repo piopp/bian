@@ -25,6 +25,18 @@ class Config:
     DEFAULT_API_KEY = ''
     DEFAULT_API_SECRET = ''
     
+    # 代理设置 - 如果需要使用代理访问币安API，请设置以下变量
+    # 示例: {'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890'}
+    PROXIES = None
+    
+    # 自动设置代理（如果有环境变量）
+    if os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY'):
+        PROXIES = {}
+        if os.environ.get('HTTP_PROXY'):
+            PROXIES['http'] = os.environ.get('HTTP_PROXY')
+        if os.environ.get('HTTPS_PROXY'):
+            PROXIES['https'] = os.environ.get('HTTPS_PROXY')
+    
     @classmethod
     def as_dict(cls):
         """将配置类转换为字典"""

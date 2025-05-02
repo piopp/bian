@@ -40,11 +40,6 @@ def create_app(config_name='default'):
     app.register_blueprint(orders_bp)
     app.register_blueprint(settings_bp)
     
-    # 初始化订单同步
-    with app.app_context():
-        from app.tasks.order_sync import init_scheduler
-        init_scheduler(app)
-    
     return app
 
 app = create_app() 

@@ -431,7 +431,11 @@
           </el-tab-pane>
 
           <el-tab-pane label="订单管理" name="orderManage">
-            <LimitOrderList :subaccounts="subaccountsWithApi" />
+            <LimitOrderList ref="orderListRef" :subaccounts="subaccountsWithApi" />
+          </el-tab-pane>
+          
+          <el-tab-pane label="历史成交" name="tradesHistory">
+            <TradeHistoryList :subaccounts="subaccountsWithApi" />
           </el-tab-pane>
           
           <el-tab-pane label="手续费统计" name="feeStats">
@@ -512,13 +516,14 @@
 </template>
 
 <script>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import { getCurrentUser } from '../services/auth'
 import LimitOrderList from '@/components/LimitOrderList.vue'
 import PositionList from '@/components/PositionList.vue'
 import FeeStatistics from '@/components/FeeStatistics.vue'
+import TradeHistoryList from '@/components/TradeHistoryList.vue'
 import { calculateOrderFee } from '@/utils/feeCalculator.js'
 
 export default {
@@ -527,6 +532,7 @@ export default {
     LimitOrderList,
     PositionList,
     FeeStatistics,
+    TradeHistoryList,
   },
   setup() {
     // 交易对列表
@@ -670,360 +676,89 @@ export default {
         isGridSubmitting.value = true;
         gridProgress.isRunning = true;
         gridProgress.current = 0;
-        gridProgress.total = gridForm.totalOrders;
+        gridProgress.total = selectedAccounts.value.length * gridForm.totalOrders;
         gridProgress.percentage = 0;
         
-        // 执行结果数组
+        // 存储所有结果
         const results = [];
         
-        // 使用异步处理所有订单
-        const processOrders = async () => {
-          const pendingResults = [];
-          const hedgeOperationsPromises = []; // 存储所有对冲操作的Promise
+        // 按批次处理订单
+        for (let batch = 0; batch < gridForm.totalOrders; batch++) {
+          // 记录批次开始时间
+          const batchStartTime = Date.now();
           
-          // 先按时间间隔发送所有请求，不等待响应
-          for (let i = 0; i < gridForm.totalOrders; i++) {
-            // 先更新进度，这样用户能立即看到进度变化
-            gridProgress.current = i + 1;
-            gridProgress.percentage = Math.floor((gridProgress.current / gridProgress.total) * 100);
-            
-            // 创建买入和卖出请求
-            const buyRequest = axios.post('/api/subaccounts/batch-open', {
-              emails: selectedAccounts.value,
-              symbol: gridForm.symbol,
-              orderType: 'LIMIT',
-              side: 'BUY',
-              quantityType: 'CONTRACT',
-              quantity: gridForm.singleAmount,
-              price: gridForm.price,
-              leverage: gridForm.leverage
-            });
-            
-            const sellRequest = axios.post('/api/subaccounts/batch-open', {
-              emails: selectedAccounts.value,
-              symbol: gridForm.symbol,
-              orderType: 'LIMIT',
-              side: 'SELL',
-              quantityType: 'CONTRACT',
-              quantity: gridForm.singleAmount,
-              price: gridForm.price,
-              leverage: gridForm.leverage
-            });
-            
-            // 存储当前订单的请求和元数据
-            pendingResults.push({
-              order: i + 1,
-              time: new Date().toLocaleTimeString(),
-              requests: Promise.all([buyRequest, sellRequest])
-                .then(([buyResponse, sellResponse]) => ({
-                  buyResult: buyResponse.data,
-                  sellResult: sellResponse.data
-                }))
-                .catch(error => {
-                  console.error(`第${i + 1}批订单执行失败:`, error);
-                  return { error: error.message };
-                })
-            });
-            
-            // 如果不是最后一笔，等待间隔时间后再发送下一笔订单
-            if (i < gridForm.totalOrders - 1) {
-              await new Promise(resolve => setTimeout(resolve, gridForm.interval * 1000));
-            }
-          }
+          console.log(`开始处理第${batch + 1}批订单...`);
           
-          // 然后异步等待所有请求完成并收集结果
-          for (const pendingResult of pendingResults) {
-            const result = await pendingResult.requests;
-            results.push({
-              order: pendingResult.order,
-              time: pendingResult.time,
-              result: result
-            });
-            
-            // 记录手续费
+          // 当前批次的所有子账号并行请求
+          const batchPromises = selectedAccounts.value.map(async (email) => {
             try {
-              // 记录买入订单历史
-              if (result.buyResult && Array.isArray(result.buyResult)) {
-                result.buyResult.filter(item => item.success).forEach(async (item) => {
-                  const orderId = item.message.match(/订单ID: (\d+)/)?.[1];
-                  if (orderId) {
-                    try {
-                      // 查询订单状态
-                      const orderStatus = await axios.post('/api/subaccounts/check-order', {
-                        email: item.email,
-                        symbol: gridForm.symbol,
-                        orderId: orderId
-                      });
-                      
-                      // 记录订单历史
-                      await axios.post('/api/order-history/record', {
-                        email: item.email,
-                        symbol: gridForm.symbol,
-                        orderType: 'LIMIT',
-                        side: 'BUY',
-                        amount: gridForm.singleAmount,
-                        price: gridForm.price,
-                        status: orderStatus.data.status,
-                        executedQty: orderStatus.data.executedQty,
-                        orderId: orderId,
-                        leverage: gridForm.leverage
-                      });
-                    } catch (error) {
-                      console.error(`记录第${pendingResult.order}批买入订单历史失败:`, error);
-                    }
-                  }
-                });
-              }
+              // 使用网格交易API
+              const response = await axios.post('/api/trading/grid/submit-and-monitor', {
+                email: email,
+                symbol: gridForm.symbol,
+                upper_price: parseFloat(gridForm.price) * 1.005,
+                lower_price: parseFloat(gridForm.price) * 0.995,
+                grid_num: 2,
+                total_investment: parseFloat(gridForm.singleAmount) * parseFloat(gridForm.price) * 2,
+                is_bilateral: true,
+                leverage: parseInt(gridForm.leverage)
+              });
               
-              // 记录卖出订单历史
-              if (result.sellResult && Array.isArray(result.sellResult)) {
-                result.sellResult.filter(item => item.success).forEach(async (item) => {
-                  const orderId = item.message.match(/订单ID: (\d+)/)?.[1];
-                  if (orderId) {
-                    try {
-                      // 查询订单状态
-                      const orderStatus = await axios.post('/api/subaccounts/check-order', {
-                        email: item.email,
-                        symbol: gridForm.symbol,
-                        orderId: orderId
-                      });
-                      
-                      // 记录订单历史
-                      await axios.post('/api/order-history/record', {
-                        email: item.email,
-                        symbol: gridForm.symbol,
-                        orderType: 'LIMIT',
-                        side: 'SELL',
-                        amount: gridForm.singleAmount,
-                        price: gridForm.price,
-                        status: orderStatus.data.status,
-                        executedQty: orderStatus.data.executedQty,
-                        orderId: orderId,
-                        leverage: gridForm.leverage
-                      });
-                    } catch (error) {
-                      console.error(`记录第${pendingResult.order}批卖出订单历史失败:`, error);
-                    }
-                  }
-                });
-              }
+              // 更新进度
+              gridProgress.current += 1;
+              gridProgress.percentage = Math.floor((gridProgress.current / gridProgress.total) * 100);
+              
+              return {
+                email: email,
+                order: batch + 1,
+                time: new Date().toLocaleTimeString(),
+                success: response.data.success,
+                message: response.data.message || "网格交易提交成功",
+                data: response.data.data || {}
+              };
             } catch (error) {
-              console.error(`第${pendingResult.order}批订单历史记录失败:`, error);
+              console.error(`子账号${email}第${batch+1}批网格建仓失败:`, error);
+              
+              // 更新进度（即使失败也要更新进度）
+              gridProgress.current += 1;
+              gridProgress.percentage = Math.floor((gridProgress.current / gridProgress.total) * 100);
+              
+              return {
+                email: email,
+                order: batch + 1,
+                time: new Date().toLocaleTimeString(),
+                success: false,
+                error: error.response?.data?.error || error.message
+              };
             }
+          });
+          
+          // 并行执行当前批次的所有请求
+          const batchResults = await Promise.all(batchPromises);
+          results.push(...batchResults);
+          
+          // 如果不是最后一批，确保从批次开始到下一批次开始有固定的间隔
+          if (batch < gridForm.totalOrders - 1) {
+            const elapsed = Date.now() - batchStartTime;
+            const targetInterval = gridForm.interval * 1000; // 转换为毫秒
             
-            // 如果有错误，显示错误消息
-            if (result.buyResult) {
-              const buySuccess = result.buyResult.filter(r => r.success).length;
-              const buyFail = result.buyResult.length - buySuccess;
-              if (buyFail > 0) {
-                ElMessage.warning(`第${pendingResult.order}批买入订单部分失败: ${buyFail}个失败`);
-              }
-            }
-            
-            if (result.sellResult) {
-              const sellSuccess = result.sellResult.filter(r => r.success).length;
-              const sellFail = result.sellResult.length - sellSuccess;
-              if (sellFail > 0) {
-                ElMessage.warning(`第${pendingResult.order}批卖出订单部分失败: ${sellFail}个失败`);
-              }
-            }
-            
-            // 为每个订单创建对冲操作并立即执行，不等待
-            try {
-              // 如果买卖结果都存在，立即进行对冲处理
-              if (result.buyResult && result.sellResult && 
-                  Array.isArray(result.buyResult) && Array.isArray(result.sellResult)) {
-                
-                // 遍历每个子账号，并行处理所有对冲操作
-                for (let i = 0; i < result.buyResult.length; i++) {
-                  const buyOrder = result.buyResult[i];
-                  const sellOrder = result.sellResult[i];
-                  const email = buyOrder.email;
-                  
-                  // 跳过不成功的订单
-                  if (!buyOrder.success || !sellOrder.success) continue;
-                  
-                  // 提取订单ID
-                  const buyOrderId = buyOrder.message.match(/订单ID: (\d+)/)?.[1];
-                  const sellOrderId = sellOrder.message.match(/订单ID: (\d+)/)?.[1];
-                  
-                  if (!buyOrderId || !sellOrderId) continue;
-                  
-                  // 立即创建对冲操作的Promise并添加到列表，但不等待其完成
-                  const hedgePromise = new Promise((resolve) => {
-                    // 立即执行
-                    setTimeout(() => {
-                      // 使用内部自调用异步函数
-                      (async () => {
-                        try {
-                          console.log(`处理子账号${email}的对冲操作，买单ID:${buyOrderId}，卖单ID:${sellOrderId}`);
-                          
-                          // 获取api设置
-                          const user = getCurrentUser();
-                          const token = user?.token;
-                          
-                          const apiSettingResponse = await axios.get('/api/subaccounts/api-export', {
-                            headers: {
-                              'Authorization': `Bearer ${token}`
-                            }
-                          });
-                          const apiSettings = apiSettingResponse.data.data || {};
-                          
-                          if (!apiSettings[email]) {
-                            console.error(`未找到子账号${email}的API设置`);
-                            resolve();
-                            return;
-                          }
-                          
-                          // 查询订单状态
-                          const [buyOrderStatus, sellOrderStatus] = await Promise.all([
-                            axios.post('/api/subaccounts/check-order', {
-                              email: email,
-                              symbol: gridForm.symbol,
-                              orderId: buyOrderId
-                            }),
-                            axios.post('/api/subaccounts/check-order', {
-                              email: email,
-                              symbol: gridForm.symbol,
-                              orderId: sellOrderId
-                            })
-                          ]);
-                          
-                          // 定义取消和补单的操作
-                          const cancelAndFill = async (side, orderId, status, email) => {
-                            // 取消未成交订单
-                            await axios.post('/api/subaccounts/cancel-order', {
-                              email: email,
-                              symbol: gridForm.symbol,
-                              orderId: orderId
-                            });
-                            
-                            // 等待取消订单操作完成
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                            
-                            // 计算剩余数量
-                            let remainingQty = gridForm.singleAmount;
-                            if (status === 'PARTIALLY_FILLED') {
-                              const orderStatus = side === 'BUY' ? buyOrderStatus : sellOrderStatus;
-                              remainingQty = gridForm.singleAmount - orderStatus.data.executedQty;
-                            }
-                            
-                            // 市价补单
-                            await axios.post('/api/subaccounts/batch-open', {
-                              emails: [email],
-                              symbol: gridForm.symbol,
-                              orderType: 'MARKET',
-                              side: side,
-                              quantityType: 'CONTRACT',
-                              quantity: remainingQty,
-                              leverage: gridForm.leverage
-                            });
-                            
-                            console.log(`子账号${email}${side === 'BUY' ? '买' : '卖'}单补单完成，数量:${remainingQty}`);
-                          };
-                          
-                          // 并行处理对冲操作，无需等待
-                          // 如果买单已成交而卖单未完全成交
-                          if (buyOrderStatus.data.status === 'FILLED' && 
-                              (sellOrderStatus.data.status === 'NEW' || sellOrderStatus.data.status === 'PARTIALLY_FILLED')) {
-                            await cancelAndFill('SELL', sellOrderId, sellOrderStatus.data.status, email);
-                          }
-                          
-                          // 如果卖单已成交而买单未完全成交
-                          else if (sellOrderStatus.data.status === 'FILLED' && 
-                                  (buyOrderStatus.data.status === 'NEW' || buyOrderStatus.data.status === 'PARTIALLY_FILLED')) {
-                            await cancelAndFill('BUY', buyOrderId, buyOrderStatus.data.status, email);
-                          }
-                          
-                          // 处理错误或过期订单，也是并行执行
-                          else if (buyOrderStatus.data.status === 'EXPIRED' || 
-                                  buyOrderStatus.data.status === 'REJECTED' ||
-                                  sellOrderStatus.data.status === 'EXPIRED' || 
-                                  sellOrderStatus.data.status === 'REJECTED') {
-                            
-                            // 买单错误或过期
-                            if (buyOrderStatus.data.status === 'EXPIRED' || buyOrderStatus.data.status === 'REJECTED') {
-                              await axios.post('/api/subaccounts/batch-open', {
-                                emails: [email],
-                                symbol: gridForm.symbol,
-                                orderType: 'MARKET',
-                                side: 'BUY',
-                                quantityType: 'CONTRACT',
-                                quantity: gridForm.singleAmount,
-                                leverage: gridForm.leverage
-                              });
-                              console.log(`子账号${email}买单错误或过期，已市价补齐${gridForm.singleAmount}数量`);
-                            }
-                            
-                            // 卖单错误或过期
-                            if (sellOrderStatus.data.status === 'EXPIRED' || sellOrderStatus.data.status === 'REJECTED') {
-                              await axios.post('/api/subaccounts/batch-open', {
-                                emails: [email],
-                                symbol: gridForm.symbol,
-                                orderType: 'MARKET',
-                                side: 'SELL',
-                                quantityType: 'CONTRACT',
-                                quantity: gridForm.singleAmount,
-                                leverage: gridForm.leverage
-                              });
-                              console.log(`子账号${email}卖单错误或过期，已市价补齐${gridForm.singleAmount}数量`);
-                            }
-                          }
-                          
-                          resolve();
-                        } catch (error) {
-                          console.error(`处理子账号${email}订单对冲失败:`, error);
-                          resolve();
-                        }
-                      })(); // 立即调用异步函数
-                    }, 0); // 立即执行，去掉15秒和5秒的等待时间
-                  });
-                  
-                  // 添加到Promise列表，但不等待
-                  hedgeOperationsPromises.push(hedgePromise);
-                }
-              }
-            } catch (hedgeError) {
-              console.error(`第${pendingResult.order}批订单对冲处理错误:`, hedgeError);
+            // 只有当已经过去的时间小于目标间隔时才等待
+            if (elapsed < targetInterval) {
+              const waitTime = targetInterval - elapsed;
+              console.log(`第${batch + 1}批完成，已用时${elapsed}ms，再等待${waitTime}ms后发送下一批...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+            } else {
+              console.log(`第${batch + 1}批处理耗时${elapsed}ms，已超过间隔时间(${targetInterval}ms)，立即发送下一批`);
             }
           }
-          
-          // 注意：不等待对冲操作完成，让它们在后台并行执行
-          console.log(`开始处理${hedgeOperationsPromises.length}个对冲操作，所有操作同时执行`);
-        };
-        
-        // 等待所有订单处理完成
-        await processOrders();
+        }
         
         // 完成所有订单
         gridProgress.percentage = 100;
         
         // 计算成功和失败的数量
-        let successCount = 0;
-        let failCount = 0;
-        
-        results.forEach(result => {
-          // 处理新的结果结构（包含买入和卖出结果）
-          if (result.result && result.result.buyResult) {
-            // 统计买入结果
-            if (Array.isArray(result.result.buyResult)) {
-              const buySuccess = result.result.buyResult.filter(r => r.success).length;
-              const buyFail = result.result.buyResult.length - buySuccess;
-              successCount += buySuccess;
-              failCount += buyFail;
-            }
-          }
-          
-          if (result.result && result.result.sellResult) {
-            // 统计卖出结果
-            if (Array.isArray(result.result.sellResult)) {
-              const sellSuccess = result.result.sellResult.filter(r => r.success).length;
-              const sellFail = result.result.sellResult.length - sellSuccess;
-              successCount += sellSuccess;
-              failCount += sellFail;
-            }
-          }
-        });
+        let successCount = results.filter(r => r.success).length;
+        let failCount = results.length - successCount;
         
         // 显示结果
         if (failCount === 0) {
@@ -1033,6 +768,23 @@ export default {
         } else {
           ElMessage.warning(`网格建仓部分成功: ${successCount}个成功, ${failCount}个失败`);
         }
+        
+        // 更新结果对话框数据
+        resultDialogVisible.value = true;
+        operationResults.value = results.map(r => ({
+          email: r.email,
+          status: r.success ? '成功' : '失败', 
+          message: r.message || r.error || ''
+        }));
+        
+        // 自动切换到订单管理界面
+        setTimeout(() => {
+          activeTab.value = 'orderManage';
+          
+          // 开启自动刷新订单列表
+          startAutoRefreshOrders();
+        }, 2000); // 延迟2秒后切换，让用户先看到结果
+        
       } catch (error) {
         if (error !== 'cancel') {
           console.error('网格建仓执行出错:', error);
@@ -1046,6 +798,69 @@ export default {
         }, 5000);
       }
     };
+
+    // 在这里添加订单自动刷新相关变量和函数
+    const orderRefreshTimer = ref(null);
+    const orderListRef = ref(null); // 添加对LimitOrderList组件的引用
+
+    // 开始自动刷新订单列表
+    const startAutoRefreshOrders = () => {
+      // 清除可能存在的旧定时器
+      if (orderRefreshTimer.value) {
+        clearInterval(orderRefreshTimer.value);
+      }
+      
+      // 创建新的定时器，每5秒刷新一次
+      orderRefreshTimer.value = setInterval(() => {
+        // 如果当前不在订单管理页面，则停止刷新
+        if (activeTab.value !== 'orderManage') {
+          stopAutoRefreshOrders();
+          return;
+        }
+        
+        // 通过ref调用LimitOrderList组件的刷新方法
+        if (orderListRef.value && typeof orderListRef.value.refreshOrderList === 'function') {
+          console.log('正在自动刷新订单列表...');
+          orderListRef.value.refreshOrderList();
+          
+          // 显示刷新提示
+          ElMessage.info({
+            message: '正在自动刷新订单列表...',
+            duration: 1000,
+            showClose: false
+          });
+        } else {
+          console.warn('找不到订单列表组件或刷新方法');
+        }
+      }, 5000);
+      
+      // 显示开始自动刷新的提示
+      ElMessage.success({
+        message: '已开启订单自动刷新(每5秒)',
+        duration: 3000
+      });
+    };
+
+    // 停止自动刷新
+    const stopAutoRefreshOrders = () => {
+      if (orderRefreshTimer.value) {
+        clearInterval(orderRefreshTimer.value);
+        orderRefreshTimer.value = null;
+        console.log('已停止自动刷新订单列表');
+      }
+    };
+
+    // 监听标签页变化，当离开订单管理页面时停止自动刷新
+    watch(activeTab, (newTab, oldTab) => {
+      if (oldTab === 'orderManage' && newTab !== 'orderManage') {
+        stopAutoRefreshOrders();
+      }
+    });
+
+    // 组件卸载时清除定时器
+    onBeforeUnmount(() => {
+      stopAutoRefreshOrders();
+    });
 
     const subaccountsWithoutApi = computed(() => {
       return subaccounts.value.filter(account => !account.apiKey || account.apiKey.trim() === '');
@@ -1995,7 +1810,11 @@ export default {
       submitGridOrders,
       calculatedFee,
       calculatedBuyFee,
-      calculatedSellFee
+      calculatedSellFee,
+      orderListRef, // 添加orderListRef到返回值
+      orderRefreshTimer,
+      startAutoRefreshOrders,
+      stopAutoRefreshOrders
     }
   }
 }
@@ -2043,4 +1862,4 @@ export default {
 .fee-value {
   color: #409EFF;
 }
-</style> 
+</style>

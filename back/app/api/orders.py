@@ -1,87 +1,47 @@
 from flask import Blueprint, jsonify, request, current_app
-from app.tasks.order_sync import (
-    get_websocket_status, restart_websocket, restart_all_websockets,
-    connect_user_websocket, sync_user_orders, check_api_permissions
-)
-from app.tasks.websocket_client import create_websocket_client
 from flask_jwt_extended import jwt_required
 from app.models.account import SubAccountAPISettings
 from datetime import datetime, timedelta
+from app.services.binance_client import BinanceClient, get_client_by_email
+from app.api.subaccounts import get_sub_account_api_credentials
 
 orders_bp = Blueprint('orders', __name__)
 
 @orders_bp.route('/api/orders/websocket/status', methods=['GET'])
 @jwt_required()
 def websocket_status():
-    """获取WebSocket连接状态"""
-    email = request.args.get('email')
-    return jsonify(get_websocket_status(email))
+    """获取WebSocket连接状态 - 已废弃"""
+    return jsonify({
+        'success': False,
+        'message': '此API已废弃，WebSocket功能已移除'
+    })
 
 @orders_bp.route('/api/orders/websocket/restart', methods=['POST'])
 @jwt_required()
 def restart_ws():
-    """重启WebSocket连接"""
-    data = request.get_json() or {}
-    email = data.get('email')
-    
-    if not email:
-        return jsonify({
-            'success': False,
-            'error': '缺少email参数'
-        }), 400
-        
-    # 验证子账号是否存在
-    account = SubAccountAPISettings.query.filter_by(email=email).first()
-    if not account:
-        return jsonify({
-            'success': False,
-            'error': '子账号不存在或未配置API'
-        }), 404
-        
-    # 重启WebSocket连接
-    result = restart_websocket(email, current_app)
-    return jsonify(result)
+    """重启WebSocket连接 - 已废弃"""
+    return jsonify({
+        'success': False,
+        'message': '此API已废弃，WebSocket功能已移除'
+    })
 
 @orders_bp.route('/api/orders/websocket/restart-all', methods=['POST'])
 @jwt_required()
 def restart_all_ws():
-    """重启所有WebSocket连接"""
-    return jsonify(restart_all_websockets(current_app))
+    """重启所有WebSocket连接 - 已废弃"""
+    return jsonify({
+        'success': False,
+        'message': '此API已废弃，WebSocket功能已移除'
+    })
 
 @orders_bp.route('/api/orders/websocket/connect', methods=['POST'])
 @jwt_required()
 def connect_ws():
-    """为子账号建立WebSocket连接"""
-    data = request.get_json() or {}
-    email = data.get('email')
-    
-    if not email:
-        return jsonify({
-            'success': False,
-            'error': '缺少email参数'
-        }), 400
-        
-    # 验证子账号是否存在
-    account = SubAccountAPISettings.query.filter_by(email=email).first()
-    if not account:
-        return jsonify({
-            'success': False,
-            'error': '子账号不存在或未配置API'
-        }), 404
-        
-    # 建立WebSocket连接
-    result = connect_user_websocket(email, current_app)
-    
-    if result:
-        return jsonify({
-            'success': True,
-            'message': f'已为子账号 {email} 建立WebSocket连接'
-        })
-    else:
-        return jsonify({
-            'success': False,
-            'error': f'为子账号 {email} 建立WebSocket连接失败'
-        }), 500
+    """为子账号建立WebSocket连接 - 已废弃"""
+    return jsonify({
+        'success': False,
+        'message': '此API已废弃，WebSocket功能已移除'
+    })
         
 @orders_bp.route('/api/orders/sync', methods=['POST'])
 @jwt_required()
@@ -106,14 +66,36 @@ def sync_orders():
             'error': '子账号不存在或未配置API'
         }), 404
         
-    # 同步订单
+    # 同步订单 - 直接使用BinanceClient获取订单
     try:
-        count = sync_user_orders(email, symbol=symbol, start_time=None if days is None else int((datetime.utcnow() - timedelta(days=days)).timestamp() * 1000))
+        # 获取子账号API客户端
+        api_key, api_secret = get_sub_account_api_credentials(email)
+        if not api_key or not api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API未配置或不可用'
+            }), 400
+        
+        client = BinanceClient(api_key, api_secret)
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        if days:
+            params['startTime'] = int((datetime.utcnow() - timedelta(days=days)).timestamp() * 1000)
+        
+        # 调用API获取订单
+        result = client._send_request('GET', '/fapi/v1/allOrders', signed=True, params=params)
+        
+        if not result.get('success'):
+            return jsonify({
+                'success': False,
+                'error': result.get('error', '获取订单失败')
+            }), 500
         
         return jsonify({
             'success': True,
-            'message': f'已同步 {count} 个订单',
-            'count': count
+            'data': result.get('data', []),
+            'count': len(result.get('data', []))
         })
         
     except Exception as e:
@@ -142,14 +124,42 @@ def check_api():
             'error': '子账号不存在或未配置API'
         }), 404
         
-    # 检查API权限
-    result = check_api_permissions(email)
-    return jsonify(result)
+    # 检查API权限 - 直接使用BinanceClient测试API
+    try:
+        # 获取子账号API客户端
+        api_key, api_secret = get_sub_account_api_credentials(email)
+        if not api_key or not api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API未配置或不可用'
+            }), 400
+        
+        client = BinanceClient(api_key, api_secret)
+        
+        # 测试账户权限
+        account_result = client._send_request('GET', '/fapi/v2/account', signed=True)
+        
+        # 测试订单权限
+        order_result = client._send_request('GET', '/fapi/v1/openOrders', signed=True)
+        
+        return jsonify({
+            'success': True,
+            'permissions': {
+                'readAccount': account_result.get('success', False),
+                'readOrders': order_result.get('success', False)
+            },
+            'message': '子账号API权限检查完成'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'API权限检查失败: {str(e)}'
+        }), 500
 
 @orders_bp.route('/api/orders/ws/query', methods=['POST'])
 @jwt_required()
 def query_order_ws():
-    """通过WebSocket查询订单"""
+    """查询订单 - 已改为REST API实现"""
     data = request.get_json() or {}
     email = data.get('email')
     symbol = data.get('symbol')
@@ -182,29 +192,38 @@ def query_order_ws():
             'error': '子账号不存在或未配置API'
         }), 404
         
-    # 创建WebSocket客户端
-    client = create_websocket_client(email)
-    if not client:
-        return jsonify({
-            'success': False,
-            'error': '创建WebSocket客户端失败'
-        }), 500
-        
-    # 查询订单
+    # 使用REST API查询订单
     try:
-        result = client.query_order(symbol, order_id, client_order_id)
-        client.close()  # 关闭连接
+        # 获取子账号API客户端
+        api_key, api_secret = get_sub_account_api_credentials(email)
+        if not api_key or not api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API未配置或不可用'
+            }), 400
+        
+        client = BinanceClient(api_key, api_secret)
+        
+        # 构建查询参数
+        params = {'symbol': symbol}
+        if order_id:
+            params['orderId'] = order_id
+        if client_order_id:
+            params['origClientOrderId'] = client_order_id
+        
+        # 查询订单
+        result = client._send_request('GET', '/fapi/v1/order', signed=True, params=params)
         return jsonify(result)
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': f'查询订单失败: {str(e)}'
         }), 500
-        
+
 @orders_bp.route('/api/orders/ws/open-orders', methods=['GET'])
 @jwt_required()
 def query_open_orders_ws():
-    """通过WebSocket查询当前挂单"""
+    """查询挂单 - 已改为REST API实现"""
     email = request.args.get('email')
     symbol = request.args.get('symbol')
     
@@ -222,21 +241,28 @@ def query_open_orders_ws():
             'error': '子账号不存在或未配置API'
         }), 404
         
-    # 创建WebSocket客户端
-    client = create_websocket_client(email)
-    if not client:
-        return jsonify({
-            'success': False,
-            'error': '创建WebSocket客户端失败'
-        }), 500
-        
-    # 查询挂单
+    # 使用REST API查询挂单
     try:
-        result = client.query_open_orders(symbol)
-        client.close()  # 关闭连接
+        # 获取子账号API客户端
+        api_key, api_secret = get_sub_account_api_credentials(email)
+        if not api_key or not api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API未配置或不可用'
+            }), 400
+        
+        client = BinanceClient(api_key, api_secret)
+        
+        # 构建查询参数
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        
+        # 查询挂单
+        result = client._send_request('GET', '/fapi/v1/openOrders', signed=True, params=params)
         return jsonify(result)
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': f'查询挂单失败: {str(e)}'
         }), 500 

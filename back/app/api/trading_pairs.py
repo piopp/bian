@@ -160,7 +160,7 @@ def delete_trading_pair(pair_id):
             "error": f"删除交易对失败: {str(e)}"
         }), 500
 
-@trading_pairs_bp.route('/toggle_favorite/<int:pair_id>', methods=['POST'])
+@trading_pairs_bp.route('/favorite/<int:pair_id>', methods=['POST'])
 def toggle_favorite(pair_id):
     """切换交易对收藏状态"""
     try:
@@ -274,4 +274,26 @@ def initialize_common_trading_pairs():
         return jsonify({
             "success": False,
             "error": f"初始化常见交易对失败: {str(e)}"
+        }), 500
+
+@trading_pairs_bp.route('/clear-all', methods=['DELETE'])
+def clear_all_trading_pairs():
+    """清空所有交易对"""
+    try:
+        # 删除所有交易对记录
+        count = db.session.query(TradingPair).delete()
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"成功清空所有交易对，共删除 {count} 个",
+            "count": count
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"清空交易对失败: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": f"清空交易对失败: {str(e)}"
         }), 500

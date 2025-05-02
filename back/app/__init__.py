@@ -4,8 +4,6 @@ from flask import Flask
 from flask_cors import CORS
 from app.models import db
 from loguru import logger
-from app.tasks.grid_trading import init_scheduler as init_grid_trading_scheduler
-from app.tasks.order_sync import init_scheduler as init_order_sync_scheduler
 
 # 配置日志
 logging.basicConfig(
@@ -63,9 +61,6 @@ def create_app(config_class=None):
     # 创建数据库表
     with app.app_context():
         db.create_all()
-        # 启动定时任务调度器
-        init_grid_trading_scheduler(app)
-        init_order_sync_scheduler(app)
     
     # 启用CORS，配置更详细的参数
     CORS(app, resources={r"/*": {

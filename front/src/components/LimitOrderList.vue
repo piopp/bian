@@ -390,8 +390,8 @@ export default {
     };
     
     // 监听自动刷新开关
-    watch(autoRefresh, (newValue) => {
-      if (newValue) {
+    watch(autoRefresh, () => {
+      if (autoRefresh.value) {
         startAutoRefresh();
       } else {
         stopAutoRefresh();
@@ -421,7 +421,8 @@ export default {
       translateStatus,
       getShortEmail,
       fetchOrders,
-      cancelOrder
+      cancelOrder,
+      refreshOrderList: fetchOrders
     };
   }
 }

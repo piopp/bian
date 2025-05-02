@@ -28,6 +28,14 @@ class Config:
     WS_LOG_LEVEL = logging.DEBUG
     WS_LOG_FILE = 'websocket.log'
     
+    # 币安API配置
+    # 如果需要使用代理访问币安API，请设置此选项，格式为 'http://host:port' 或 'socks5://host:port'
+    BINANCE_PROXY = os.environ.get('BINANCE_PROXY', None)
+    
+    # 默认API密钥(主账号)
+    DEFAULT_API_KEY = os.environ.get('DEFAULT_API_KEY', '')
+    DEFAULT_API_SECRET = os.environ.get('DEFAULT_API_SECRET', '')
+    
     # 综合日志处理器
     @staticmethod
     def init_app(app):
@@ -65,6 +73,12 @@ class Config:
         websocket_handler.setFormatter(websocket_formatter)
         websocket_logger.addHandler(websocket_handler)
         websocket_logger.propagate = False  # 避免日志重复
+        
+        # 打印代理设置信息
+        if Config.BINANCE_PROXY:
+            app.logger.info(f"使用代理访问币安API: {Config.BINANCE_PROXY}")
+        else:
+            app.logger.info("未设置代理，将直接访问币安API")
         
 class DevelopmentConfig(Config):
     """开发环境配置"""

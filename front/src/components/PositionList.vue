@@ -72,15 +72,15 @@
         </el-table-column>
         <el-table-column prop="unrealizedProfit" label="未实现盈亏" width="120" sortable>
           <template #default="scope">
-            <span :class="parseFloat(scope.row.unrealizedProfit) >= 0 ? 'text-success' : 'text-danger'">
-              {{ parseFloat(scope.row.unrealizedProfit).toFixed(2) }}
+            <span :class="getPnlValue(scope.row) >= 0 ? 'text-success' : 'text-danger'">
+              {{ formatPnl(scope.row) }}
             </span>
           </template>
         </el-table-column>
         <el-table-column prop="pnlPercentage" label="收益率" width="100" sortable>
           <template #default="scope">
-            <span :class="parseFloat(scope.row.pnlPercentage) >= 0 ? 'text-success' : 'text-danger'">
-              {{ parseFloat(scope.row.pnlPercentage).toFixed(2) }}%
+            <span :class="getPnlPercentage(scope.row) >= 0 ? 'text-success' : 'text-danger'">
+              {{ formatPnlPercentage(scope.row) }}%
             </span>
           </template>
         </el-table-column>
@@ -160,7 +160,6 @@ export default {
         // 获取当前用户和token
         const user = getCurrentUser();
         const token = user?.token;
-        const userIdValue = user?.id;
         
         // 使用传递进来的子账号列表
         const emails = props.subaccounts.map(account => account.email);
@@ -171,12 +170,11 @@ export default {
           return;
         }
         
-        console.log("发送请求参数：", { emails, userId: userIdValue });
+        console.log("发送请求参数：", { emails });
         
-        // 批量查询所有选中子账号的持仓信息
+        // 批量查询所有选中子账号的持仓信息 - 移除过时的userId参数
         const response = await axios.post('/api/subaccounts/futures-positions', {
-          emails: emails,
-          userId: userIdValue
+          emails: emails
         }, {
           headers: {
             'Authorization': `Bearer ${token}`
@@ -321,6 +319,54 @@ export default {
       }
     });
     
+    // 获取盈亏值（处理字段名不一致的情况）
+    const getPnlValue = (position) => {
+      // 按照可能的字段名顺序尝试获取
+      const pnlValue = position.unrealizedProfit || position.unRealizedProfit || position.unrealisedProfit || 0;
+      return parseFloat(pnlValue);
+    };
+    
+    // 格式化盈亏显示
+    const formatPnl = (position) => {
+      const pnlValue = getPnlValue(position);
+      return pnlValue.toFixed(2);
+    };
+    
+    // 获取收益率值（处理字段名不一致的情况和可能的计算错误）
+    const getPnlPercentage = (position) => {
+      // 尝试获取现有的收益率，如果不存在则尝试计算
+      if (position.pnlPercentage !== undefined) {
+        return parseFloat(position.pnlPercentage);
+      }
+      
+      try {
+        // 如果没有预计算的收益率，尝试重新计算
+        const pnlValue = getPnlValue(position);
+        const entryPrice = parseFloat(position.entryPrice || 0);
+        const positionAmt = parseFloat(position.positionAmt || 0);
+        
+        if (entryPrice <= 0 || positionAmt === 0) return 0;
+        
+        // 计算总开仓价值
+        const positionValue = Math.abs(entryPrice * positionAmt);
+        
+        // 预防除以零错误
+        if (positionValue <= 0) return 0;
+        
+        // 计算收益率
+        return (pnlValue / positionValue) * 100;
+      } catch (e) {
+        console.error('计算收益率失败:', e);
+        return 0;
+      }
+    };
+    
+    // 格式化收益率显示
+    const formatPnlPercentage = (position) => {
+      const percentage = getPnlPercentage(position);
+      return percentage.toFixed(2);
+    };
+    
     onMounted(() => {
       fetchPositions();
     });
@@ -338,6 +384,10 @@ export default {
       commonSymbols,
       autoRefresh,
       getShortEmail,
+      getPnlValue,
+      formatPnl,
+      getPnlPercentage,
+      formatPnlPercentage,
       fetchPositions,
       closePosition
     };

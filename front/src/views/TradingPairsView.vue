@@ -14,6 +14,9 @@
             <el-button type="warning" @click="showImportDialog" size="small">
               批量导入
             </el-button>
+            <el-button type="danger" @click="confirmClearAll" size="small">
+              清空交易对
+            </el-button>
           </div>
         </div>
       </template>
@@ -272,6 +275,7 @@ export default {
     const showAddDialog = () => {
       isEditMode.value = false
       resetForm()
+      form.is_favorite = true
       dialogVisible.value = true
     }
     
@@ -297,13 +301,47 @@ export default {
     const saveTradingPair = async () => {
       isSaving.value = true
       try {
-        let response
+        // 确保基础字段存在
+        const formData = { ...form }
+        
+        // 如果base_asset或quote_asset为空，尝试从symbol中解析
+        if (!isEditMode.value) {
+          if (!formData.base_asset || !formData.quote_asset) {
+            // 常见的计价资产列表
+            const quoteAssets = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'BNB'];
+            let found = false;
+            
+            // 检查symbol是否以已知计价资产结尾
+            for (const quote of quoteAssets) {
+              if (formData.symbol.endsWith(quote)) {
+                const base = formData.symbol.slice(0, -quote.length);
+                if (base) {
+                  if (!formData.base_asset) formData.base_asset = base;
+                  if (!formData.quote_asset) formData.quote_asset = quote;
+                  found = true;
+                  break;
+                }
+              }
+            }
+            
+            // 如果没有匹配到任何已知计价资产，使用一个基本的规则
+            if (!found) {
+              // 假设后4个字符是计价资产，前面的是基础资产
+              if (formData.symbol.length > 4) {
+                if (!formData.base_asset) formData.base_asset = formData.symbol.slice(0, -4);
+                if (!formData.quote_asset) formData.quote_asset = formData.symbol.slice(-4);
+              }
+            }
+          }
+        }
+
+        let response;
         if (isEditMode.value) {
           // 更新
-          response = await axios.put(`/api/trading-pairs/${form.id}`, form)
+          response = await axios.put(`/api/trading-pairs/${form.id}`, formData);
         } else {
           // 新增
-          response = await axios.post('/api/trading-pairs', form)
+          response = await axios.post('/api/trading-pairs/add', formData);
         }
         
         if (response.data.success) {
@@ -339,7 +377,7 @@ export default {
     // 删除交易对
     const deleteTradingPair = async (id) => {
       try {
-        const response = await axios.delete(`/api/trading-pairs/${id}`)
+        const response = await axios.delete(`/api/trading-pairs/delete/${id}`)
         if (response.data.success) {
           ElMessage.success(response.data.message || '删除成功')
           loadTradingPairs()
@@ -352,10 +390,44 @@ export default {
       }
     }
     
+    // 确认清空所有交易对
+    const confirmClearAll = () => {
+      ElMessageBox.confirm(
+        '确定要清空所有交易对吗？此操作不可恢复！',
+        '危险操作',
+        {
+          confirmButtonText: '确定清空',
+          cancelButtonText: '取消',
+          type: 'danger',
+          confirmButtonClass: 'el-button--danger',
+        }
+      ).then(() => {
+        clearAllTradingPairs()
+      }).catch(() => {})
+    }
+    
+    // 清空所有交易对
+    const clearAllTradingPairs = async () => {
+      try {
+        const response = await axios.delete('/api/trading-pairs/clear-all')
+        if (response.data.success) {
+          ElMessage.success(response.data.message)
+          loadTradingPairs()
+        } else {
+          ElMessage.error('清空交易对失败: ' + response.data.error)
+        }
+      } catch (error) {
+        console.error('清空交易对失败:', error)
+        ElMessage.error('清空交易对失败: ' + (error.response?.data?.error || error.message))
+      }
+    }
+    
     // 切换收藏状态
     const toggleFavorite = async (row) => {
       try {
-        const response = await axios.post(`/api/trading-pairs/toggle-favorite/${row.id}`)
+        const response = await axios.post(`/api/trading-pairs/favorite/${row.id}`, {
+          is_favorite: !row.is_favorite
+        })
         if (response.data.success) {
           ElMessage.success(response.data.message)
           // 更新本地状态
@@ -477,7 +549,8 @@ export default {
       toggleFavorite,
       showImportDialog,
       importTradingPairs,
-      initializeCommonPairs
+      initializeCommonPairs,
+      confirmClearAll
     }
   }
 }
