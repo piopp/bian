@@ -23,10 +23,6 @@
           <el-icon><Money /></el-icon>
           <span>交易对管理</span>
         </el-menu-item>
-        <el-menu-item index="/fee-statistics">
-          <el-icon><Histogram /></el-icon>
-          <span>手续费统计</span>
-        </el-menu-item>
         <el-sub-menu index="user">
           <template #title>
             <el-icon><user /></el-icon>
@@ -51,7 +47,7 @@
 <script>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { House, User, SwitchButton, Key, Money, Histogram } from '@element-plus/icons-vue'
+import { House, User, SwitchButton, Key, Money } from '@element-plus/icons-vue'
 import { logout, getCurrentUser, isAuthenticated } from '../services/auth.js'
 import { ElMessage } from 'element-plus'
 
@@ -62,8 +58,7 @@ export default {
     User,
     SwitchButton,
     Key,
-    Money,
-    Histogram
+    Money
   },
   setup() {
     const activeIndex = ref('1')
@@ -134,11 +129,6 @@ export default {
           // 交易对管理页面
           console.log('正在导航到交易对管理页面');
           router.push('/trading-pairs');
-          break;
-        case '/fee-statistics':
-          // 手续费统计页面
-          console.log('正在导航到手续费统计页面');
-          router.push('/fee-statistics');
           break;
         default:
           console.log('未知的菜单项:', key);

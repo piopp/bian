@@ -16,9 +16,6 @@ class Config:
     
     # SQLAlchemy配置
     SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(DATA_DIR, 'app.db')
-    SQLALCHEMY_BINDS = {
-        'fee_statistics': 'sqlite:///' + os.path.join(DATA_DIR, 'fee_statistics.db')
-    }
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     # 币安API默认设置
@@ -57,7 +54,6 @@ class TestingConfig(Config):
     
     # 使用内存数据库进行测试
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-    SQLALCHEMY_BINDS = {}  # 测试时不使用绑定
 
 class ProductionConfig(Config):
     """生产环境配置"""

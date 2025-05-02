@@ -2,7 +2,6 @@ def register_blueprints(app):
     """注册所有API蓝图"""
     from app.api.auth import auth_bp
     from app.api.subaccounts import subaccounts_bp
-    from app.api.statistics import statistics_bp
     from app.api.settings import settings_bp
     from app.api.trading import trading_bp
     from app.api.trading_pairs import trading_pairs_bp
@@ -13,7 +12,6 @@ def register_blueprints(app):
     # 注册蓝图
     app.register_blueprint(auth_bp)
     app.register_blueprint(subaccounts_bp)
-    app.register_blueprint(statistics_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(trading_bp)
     app.register_blueprint(trading_pairs_bp)

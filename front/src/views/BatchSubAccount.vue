@@ -112,35 +112,6 @@
                       <label class="form-label">价格</label>
                       <el-input v-model="openForm.price" placeholder="输入价格"></el-input>
                     </div>
-                    <div class="mb-3" v-if="openForm.orderType === 'LIMIT' && openForm.price && (openForm.quantity || openForm.buyQuantity || openForm.sellQuantity)">
-                      <label class="form-label">预估手续费</label>
-                      <div class="fee-container">
-                        <el-select v-model="openForm.feeType" class="fee-type-select" size="small">
-                          <el-option label="挂单(Maker)" value="MAKER"></el-option>
-                          <el-option label="吃单(Taker)" value="TAKER"></el-option>
-                        </el-select>
-                        <div class="fee-info">
-                          <div v-if="openForm.side !== 'BOTH'">
-                            <span class="fee-label">手续费({{openForm.quantityType === 'USD' ? 'USDT' : openForm.symbol.replace('USDT', '')}}): </span>
-                            <span class="fee-value">{{ calculatedFee }}</span>
-                          </div>
-                          <div v-else>
-                            <div v-if="openForm.buyQuantity">
-                              <span class="fee-label">买入手续费: </span>
-                              <span class="fee-value">{{ calculatedBuyFee }}</span>
-                            </div>
-                            <div v-if="openForm.sellQuantity">
-                              <span class="fee-label">卖出手续费: </span>
-                              <span class="fee-value">{{ calculatedSellFee }}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <small class="form-text text-muted">
-                        * Maker费率: 0.02%, Taker费率: 0.07%
-                        <a href="https://www.binance.com/zh-CN/fee/futures" target="_blank">查看详情</a>
-                      </small>
-                    </div>
                     <div class="mb-3">
                       <label class="form-label">杠杆</label>
                       <el-input v-model="openForm.leverage" type="number" placeholder="输入杠杆倍数(2-125)" min="2" max="125"></el-input>
@@ -339,17 +310,6 @@
                       </div>
                     </div>
                 </div>
-                <div class="row mt-3" v-if="gridProgress.isRunning">
-                  <div class="col-12">
-                    <el-alert
-                      type="info"
-                      :title="`正在执行: ${gridProgress.current}/${gridProgress.total} 订单`"
-                      show-icon
-                    >
-                      <el-progress :percentage="gridProgress.percentage" />
-                    </el-alert>
-                  </div>
-                </div>
               </div>
             </div>
           </el-tab-pane>
@@ -437,10 +397,6 @@
           <el-tab-pane label="历史成交" name="tradesHistory">
             <TradeHistoryList :subaccounts="subaccountsWithApi" />
           </el-tab-pane>
-          
-          <el-tab-pane label="手续费统计" name="feeStats">
-            <FeeStatistics :subaccounts="subaccountsWithApi" />
-          </el-tab-pane>
         </el-tabs>
       </div>
     </div>
@@ -522,16 +478,13 @@ import axios from 'axios'
 import { getCurrentUser } from '../services/auth'
 import LimitOrderList from '@/components/LimitOrderList.vue'
 import PositionList from '@/components/PositionList.vue'
-import FeeStatistics from '@/components/FeeStatistics.vue'
 import TradeHistoryList from '@/components/TradeHistoryList.vue'
-import { calculateOrderFee } from '@/utils/feeCalculator.js'
 
 export default {
   name: 'BatchSubAccount',
   components: {
     LimitOrderList,
     PositionList,
-    FeeStatistics,
     TradeHistoryList,
   },
   setup() {
@@ -572,7 +525,6 @@ export default {
       leverage: '',
       reduceOnly: false,
       quantityType: 'USDT',
-      feeType: 'MAKER',
     })
 
     const closeForm = reactive({
@@ -643,17 +595,10 @@ export default {
       return (parseFloat(gridForm.singleAmount) * gridForm.totalOrders).toFixed(4);
     })
 
-    const gridProgress = reactive({
-      isRunning: false,
-      current: 0,
-      total: 0,
-      percentage: 0
-    })
-    
     // 在script的setup中添加新的isGridSubmitting状态
     const isGridSubmitting = ref(false);
     
-    // 在script的setup中添加新的submitGridOrders方法
+    // 在script的setup中修改submitGridOrders方法
     const submitGridOrders = async () => {
       try {
         // 检查表单数据
@@ -674,10 +619,19 @@ export default {
         );
         
         isGridSubmitting.value = true;
-        gridProgress.isRunning = true;
-        gridProgress.current = 0;
-        gridProgress.total = selectedAccounts.value.length * gridForm.totalOrders;
-        gridProgress.percentage = 0;
+        
+        // 设置进度状态
+        const gridProgress = {
+          isRunning: true,
+          current: 0,
+          total: selectedAccounts.value.length * gridForm.totalOrders,
+          percentage: 0
+        };
+        
+        // 触发进度更新事件，传递给订单管理页面
+        window.dispatchEvent(new CustomEvent('grid-progress-update', { 
+          detail: gridProgress 
+        }));
         
         // 存储所有结果
         const results = [];
@@ -699,7 +653,7 @@ export default {
                 upper_price: parseFloat(gridForm.price) * 1.005,
                 lower_price: parseFloat(gridForm.price) * 0.995,
                 grid_num: 2,
-                total_investment: parseFloat(gridForm.singleAmount) * parseFloat(gridForm.price) * 2,
+                single_amount: parseFloat(gridForm.singleAmount),
                 is_bilateral: true,
                 leverage: parseInt(gridForm.leverage)
               });
@@ -707,6 +661,11 @@ export default {
               // 更新进度
               gridProgress.current += 1;
               gridProgress.percentage = Math.floor((gridProgress.current / gridProgress.total) * 100);
+              
+              // 触发进度更新事件
+              window.dispatchEvent(new CustomEvent('grid-progress-update', { 
+                detail: gridProgress 
+              }));
               
               return {
                 email: email,
@@ -723,12 +682,17 @@ export default {
               gridProgress.current += 1;
               gridProgress.percentage = Math.floor((gridProgress.current / gridProgress.total) * 100);
               
+              // 触发进度更新事件
+              window.dispatchEvent(new CustomEvent('grid-progress-update', { 
+                detail: gridProgress 
+              }));
+              
               return {
                 email: email,
                 order: batch + 1,
                 time: new Date().toLocaleTimeString(),
                 success: false,
-                error: error.response?.data?.error || error.message
+                message: error.response?.data?.error || error.message
               };
             }
           });
@@ -755,6 +719,19 @@ export default {
         
         // 完成所有订单
         gridProgress.percentage = 100;
+        
+        // 发送最终进度更新
+        window.dispatchEvent(new CustomEvent('grid-progress-update', { 
+          detail: gridProgress 
+        }));
+        
+        // 5秒后隐藏进度条
+        setTimeout(() => {
+          gridProgress.isRunning = false;
+          window.dispatchEvent(new CustomEvent('grid-progress-update', { 
+            detail: gridProgress 
+          }));
+        }, 5000);
         
         // 计算成功和失败的数量
         let successCount = results.filter(r => r.success).length;
@@ -792,10 +769,6 @@ export default {
         }
       } finally {
         isGridSubmitting.value = false;
-        // 5秒后隐藏进度条
-        setTimeout(() => {
-          gridProgress.isRunning = false;
-        }, 5000);
       }
     };
 
@@ -1020,40 +993,6 @@ export default {
                 message: `买入: ${item.message}`
               }));
               responseData = [...buyResults];
-              
-              // 记录手续费（仅限价单）
-              if (openForm.orderType === 'LIMIT' && openForm.price) {
-                // 为每个成功的订单记录手续费
-                buyResults.filter(item => item.success).forEach(async (item) => {
-                  const orderId = item.message.match(/订单ID: (\d+)/)?.[1];
-                  if (orderId) {
-                    try {
-                      // 查询订单状态
-                      const orderStatus = await axios.post('/api/subaccounts/check-order', {
-                        email: item.email,
-                        symbol: openForm.symbol,
-                        orderId: orderId
-                      });
-                      
-                      // 记录订单历史
-                      await axios.post('/api/order-history/record', {
-                        email: item.email,
-                        symbol: openForm.symbol,
-                        orderType: openForm.orderType,
-                        side: 'BUY',
-                        amount: openForm.buyQuantity,
-                        price: openForm.price,
-                        status: orderStatus.data.status,
-                        executedQty: orderStatus.data.executedQty,
-                        orderId: orderId,
-                        leverage: openForm.leverage
-                      });
-                    } catch (error) {
-                      console.error('记录买入订单历史失败:', error);
-                    }
-                  }
-                });
-              }
             }
             
             // 处理卖出结果（如果有）
@@ -1063,40 +1002,6 @@ export default {
                 ...item,
                 message: `卖出: ${item.message}`
               }));
-              
-              // 记录手续费（仅限价单）
-              if (openForm.orderType === 'LIMIT' && openForm.price) {
-                // 为每个成功的订单记录手续费
-                sellResults.filter(item => item.success).forEach(async (item) => {
-                  const orderId = item.message.match(/订单ID: (\d+)/)?.[1];
-                  if (orderId) {
-                    try {
-                      // 查询订单状态
-                      const orderStatus = await axios.post('/api/subaccounts/check-order', {
-                        email: item.email,
-                        symbol: openForm.symbol,
-                        orderId: orderId
-                      });
-                      
-                      // 记录订单历史
-                      await axios.post('/api/order-history/record', {
-                        email: item.email,
-                        symbol: openForm.symbol,
-                        orderType: openForm.orderType,
-                        side: 'SELL',
-                        amount: openForm.sellQuantity,
-                        price: openForm.price,
-                        status: orderStatus.data.status,
-                        executedQty: orderStatus.data.executedQty,
-                        orderId: orderId,
-                        leverage: openForm.leverage
-                      });
-                    } catch (error) {
-                      console.error('记录卖出订单历史失败:', error);
-                    }
-                  }
-                });
-              }
               
               // 整合结果
               // 如果是同一个邮箱，则合并其买入和卖出结果
@@ -1130,40 +1035,6 @@ export default {
           })
           
           responseData = response.data;
-          
-          // 记录手续费（仅限价单）
-          if (openForm.orderType === 'LIMIT' && openForm.price) {
-            // 为每个成功的订单记录手续费
-            responseData.filter(item => item.success).forEach(async (item) => {
-              const orderId = item.message.match(/订单ID: (\d+)/)?.[1];
-              if (orderId) {
-                try {
-                  // 查询订单状态
-                  const orderStatus = await axios.post('/api/subaccounts/check-order', {
-                    email: item.email,
-                    symbol: openForm.symbol,
-                    orderId: orderId
-                  });
-                  
-                  // 记录订单历史
-                  await axios.post('/api/order-history/record', {
-                    email: item.email,
-                    symbol: openForm.symbol,
-                    orderType: openForm.orderType,
-                    side: openForm.side,
-                    amount: openForm.quantity,
-                    price: openForm.price,
-                    status: orderStatus.data.status,
-                    executedQty: orderStatus.data.executedQty,
-                    orderId: orderId,
-                    leverage: openForm.leverage
-                  });
-                } catch (error) {
-                  console.error('记录买入订单历史失败:', error);
-                }
-              }
-            });
-          }
         }
         
         operationResults.value = responseData;
@@ -1699,67 +1570,6 @@ export default {
     // 生命周期钩子
     onMounted(initialize)
 
-    
-    // 计算单个订单手续费
-    const calculateFee = (price, amount, feeType) => {
-      if (!price || !amount) return '0';
-      
-      // 使用feeCalculator.js中的功能
-      const order = {
-        symbol: gridForm.symbol || openForm.symbol,
-        orderType: 'LIMIT',
-        productType: 'USDT_FUTURE',
-        amount: amount,
-        price: price,
-        status: 'FILLED',
-        isMaker: feeType === 'MAKER'
-      };
-      
-      const { fee } = calculateOrderFee(order);
-      return fee;
-    }
-    
-    // 计算普通订单手续费
-    const calculatedFee = computed(() => {
-      if (openForm.orderType !== 'LIMIT' || !openForm.price) return '0'
-      
-      if (openForm.side !== 'BOTH') {
-        if (openForm.quantityType === 'USD') {
-          // USDT计价时，手续费以USDT支付
-          return calculateFee(1, openForm.quantity, openForm.feeType) + ' USDT'
-        } else {
-          // 本币计价时，手续费以交易币种支付
-          return calculateFee(openForm.price, openForm.quantity, openForm.feeType) + 
-            (openForm.symbol ? ' ' + openForm.symbol.replace('USDT', '') : '')
-        }
-      }
-      return '0'
-    })
-    
-    // 计算买入订单手续费
-    const calculatedBuyFee = computed(() => {
-      if (openForm.orderType !== 'LIMIT' || !openForm.price || !openForm.buyQuantity) return '0'
-      
-      if (openForm.quantityType === 'USD') {
-        return calculateFee(1, openForm.buyQuantity, openForm.feeType) + ' USDT'
-      } else {
-        return calculateFee(openForm.price, openForm.buyQuantity, openForm.feeType) + 
-          (openForm.symbol ? ' ' + openForm.symbol.replace('USDT', '') : '')
-      }
-    })
-    
-    // 计算卖出订单手续费
-    const calculatedSellFee = computed(() => {
-      if (openForm.orderType !== 'LIMIT' || !openForm.price || !openForm.sellQuantity) return '0'
-      
-      if (openForm.quantityType === 'USD') {
-        return calculateFee(1, openForm.sellQuantity, openForm.feeType) + ' USDT'
-      } else {
-        return calculateFee(openForm.price, openForm.sellQuantity, openForm.feeType) + 
-          (openForm.symbol ? ' ' + openForm.symbol.replace('USDT', '') : '')
-      }
-    })
-
     return {
       tradingPairs,
       isLoadingTradingPairs,
@@ -1805,13 +1615,9 @@ export default {
       queryFuturesPositions,
       isGridFormValid,
       totalAmount,
-      gridProgress,
       isGridSubmitting,
       submitGridOrders,
-      calculatedFee,
-      calculatedBuyFee,
-      calculatedSellFee,
-      orderListRef, // 添加orderListRef到返回值
+      orderListRef,
       orderRefreshTimer,
       startAutoRefreshOrders,
       stopAutoRefreshOrders

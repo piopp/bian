@@ -1,5 +1,19 @@
 <template>
   <div class="limit-order-container">
+    <!-- 网格建仓进度条 -->
+    <el-card v-if="gridProgress.isRunning" class="mb-3">
+      <el-alert
+        type="info"
+        :title="`正在执行网格建仓: ${gridProgress.current}/${gridProgress.total} 订单`"
+        show-icon
+      >
+        <el-progress :percentage="gridProgress.percentage" />
+        <div class="mt-2 text-muted">
+          <small>正在为您执行网格建仓，订单将陆续出现在下方列表中。请勿刷新页面。</small>
+        </div>
+      </el-alert>
+    </el-card>
+
     <el-card class="order-list-card">
       <template #header>
         <div class="card-header">
@@ -116,7 +130,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, reactive } from 'vue';
 import axios from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { parseApiResult } from '@/utils/apiHelper';
@@ -137,6 +151,14 @@ export default {
     const orderTypeFilter = ref('ALL'); // 默认显示所有订单
     const autoRefresh = ref(false);
     const refreshTimer = ref(null);
+    
+    // 添加网格建仓进度状态
+    const gridProgress = reactive({
+      isRunning: false,
+      current: 0,
+      total: 0,
+      percentage: 0
+    });
     
     // 根据筛选条件过滤订单
     const filteredOrdersData = computed(() => {
@@ -398,13 +420,34 @@ export default {
       }
     });
     
+    // 添加网格建仓进度更新事件监听
+    const updateGridProgress = (data) => {
+      console.log('接收到网格建仓进度更新:', data);
+      gridProgress.isRunning = data.isRunning;
+      gridProgress.current = data.current;
+      gridProgress.total = data.total;
+      gridProgress.percentage = data.percentage;
+      
+      // 如果有进度更新且没有开启自动刷新，则自动开启
+      if (data.isRunning && !autoRefresh.value) {
+        console.log('网格建仓进行中，自动开启订单刷新');
+        autoRefresh.value = true;
+      }
+    };
+    
     onMounted(() => {
       fetchOrders();
+      
+      // 监听网格建仓进度事件
+      window.addEventListener('grid-progress-update', (event) => {
+        updateGridProgress(event.detail);
+      });
     });
     
-    // 组件销毁时清除定时器
+    // 组件销毁时清除定时器和事件监听
     onUnmounted(() => {
       stopAutoRefresh();
+      window.removeEventListener('grid-progress-update', updateGridProgress);
     });
     
     return {
@@ -415,6 +458,7 @@ export default {
       orderTypeFilter,
       commonSymbols,
       autoRefresh,
+      gridProgress,
       formatOrderTime,
       getOrderType,
       getStatusTagType,
@@ -452,5 +496,17 @@ export default {
   text-align: center;
   padding: 20px;
   color: #909399;
+}
+
+.mb-3 {
+  margin-bottom: 1rem;
+}
+
+.mt-2 {
+  margin-top: 0.5rem;
+}
+
+.text-muted {
+  color: #6c757d;
 }
 </style> 

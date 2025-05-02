@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timedelta
-from app.models import db, GridTrading, OrderHistory, FeeStatistics, TradeHistory
-from app.services.fee_calculator import calculate_order_fee
+from app.models import db, GridTrading, OrderHistory, TradeHistory
 import math
 import json
 import logging
@@ -26,7 +25,7 @@ def create_grid():
         "upper_price": 上限价格,
         "lower_price": 下限价格,
         "grid_num": 网格数量,
-        "total_investment": 总投资额,
+        "single_amount": 单笔数量(本币),
         "is_bilateral": 是否双向(true/false),
         "leverage": 杠杆倍数(默认1),
         "stop_loss_price": 止损价格(可选),
@@ -37,7 +36,7 @@ def create_grid():
         data = request.json
         
         # 检查必填参数
-        required_fields = ['email', 'symbol', 'upper_price', 'lower_price', 'grid_num', 'total_investment']
+        required_fields = ['email', 'symbol', 'upper_price', 'lower_price', 'grid_num', 'single_amount']
         for field in required_fields:
             if field not in data:
                 return jsonify({"success": False, "error": f"缺少必填参数: {field}"})
@@ -48,7 +47,7 @@ def create_grid():
         upper_price = float(data.get('upper_price'))
         lower_price = float(data.get('lower_price'))
         grid_num = int(data.get('grid_num'))
-        total_investment = float(data.get('total_investment'))
+        single_amount = float(data.get('single_amount'))  # 直接获取单笔数量
         is_bilateral = data.get('is_bilateral', False)
         leverage = int(data.get('leverage', 1))
         stop_loss_price = data.get('stop_loss_price')
@@ -61,8 +60,8 @@ def create_grid():
         if grid_num < 2:
             return jsonify({"success": False, "error": "网格数量必须大于或等于2"})
         
-        if total_investment <= 0:
-            return jsonify({"success": False, "error": "投资总额必须大于0"})
+        if single_amount <= 0:
+            return jsonify({"success": False, "error": "单笔数量必须大于0"})
         
         # 获取API客户端
         api_key, api_secret = get_sub_account_api_credentials(email)
@@ -77,8 +76,8 @@ def create_grid():
         # 创建网格价格点
         grid_prices = calculate_grid_prices(lower_price, upper_price, grid_num, client, symbol)
         
-        # 计算每个网格的投资金额
-        per_grid_investment = total_investment / (grid_num - 1)
+        # 计算总投资额 (用于记录和追踪)
+        total_investment = single_amount * grid_num * ((upper_price + lower_price) / 2)
         
         # 生成网格ID
         grid_id = f"GRID_{email}_{symbol}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -93,8 +92,8 @@ def create_grid():
             # 卖出订单价格是当前网格点
             sell_price = grid_prices[i + 1]
             
-            # 每个网格点需要购买的数量（原始数量）
-            raw_quantity = per_grid_investment / buy_price
+            # 直接使用指定的单笔数量
+            raw_quantity = single_amount
             
             # 使用交易对精度格式化数量
             quantity = format_quantity(client, symbol, raw_quantity)
@@ -172,7 +171,6 @@ def create_grid():
                 leverage=order["leverage"],
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
-                fee_recorded=False
             )
             
             db.session.add(order_record)
@@ -330,13 +328,25 @@ def submit_and_monitor_grid():
     """
     提交网格建仓并实时监控订单状态，自动补齐不平衡的订单
     
-    请求参数与create_grid相同，但会增加自动监控和平衡功能
+    请求参数:
+    {
+        "email": "子账号邮箱",
+        "symbol": "交易对",
+        "upper_price": 上限价格,
+        "lower_price": 下限价格,
+        "grid_num": 网格数量,
+        "single_amount": 单笔数量(本币),
+        "is_bilateral": 是否双向(true/false),
+        "leverage": 杠杆倍数(默认1),
+        "stop_loss_price": 止损价格(可选),
+        "stop_profit_price": 止盈价格(可选)
+    }
     """
     try:
         data = request.json
         
         # 检查必填参数
-        required_fields = ['email', 'symbol', 'upper_price', 'lower_price', 'grid_num', 'total_investment']
+        required_fields = ['email', 'symbol', 'upper_price', 'lower_price', 'grid_num', 'single_amount']
         for field in required_fields:
             if field not in data:
                 return jsonify({"success": False, "error": f"缺少必填参数: {field}"})
@@ -347,7 +357,7 @@ def submit_and_monitor_grid():
         upper_price = float(data.get('upper_price'))
         lower_price = float(data.get('lower_price'))
         grid_num = int(data.get('grid_num'))
-        total_investment = float(data.get('total_investment'))
+        single_amount = float(data.get('single_amount'))  # 直接获取单笔数量
         is_bilateral = data.get('is_bilateral', False)
         leverage = int(data.get('leverage', 1))
         stop_loss_price = data.get('stop_loss_price')
@@ -360,8 +370,8 @@ def submit_and_monitor_grid():
         if grid_num < 2:
             return jsonify({"success": False, "error": "网格数量必须大于或等于2"})
         
-        if total_investment <= 0:
-            return jsonify({"success": False, "error": "投资总额必须大于0"})
+        if single_amount <= 0:
+            return jsonify({"success": False, "error": "单笔数量必须大于0"})
         
         # 获取API客户端
         api_key, api_secret = get_sub_account_api_credentials(email)
@@ -376,8 +386,8 @@ def submit_and_monitor_grid():
         # 创建网格价格点
         grid_prices = calculate_grid_prices(lower_price, upper_price, grid_num, client, symbol)
         
-        # 计算每个网格的投资金额
-        per_grid_investment = total_investment / (grid_num - 1)
+        # 计算总投资额 (用于记录和追踪)
+        total_investment = single_amount * grid_num * ((upper_price + lower_price) / 2)
         
         # 生成网格ID
         grid_id = f"GRID_{email}_{symbol}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -392,8 +402,8 @@ def submit_and_monitor_grid():
             # 卖出订单价格是当前网格点
             sell_price = grid_prices[i + 1]
             
-            # 每个网格点需要购买的数量（原始数量）
-            raw_quantity = per_grid_investment / buy_price
+            # 直接使用指定的单笔数量
+            raw_quantity = single_amount
             
             # 使用交易对精度格式化数量
             quantity = format_quantity(client, symbol, raw_quantity)
@@ -480,18 +490,28 @@ def submit_and_monitor_grid():
         # 提交数据库事务
         db.session.commit()
         
+        # 更新网格状态为运行中
+        new_grid.status = "RUNNING"
+        db.session.commit()
+        
         # 异步开始监控订单
+        # 注意：这里使用15秒和5秒的等待时间，所以需要运行一段时间
+        logger.info(f"准备启动网格监控，共有{len(order_pairs)}对订单需要监控")
+        
+        # 启动监控线程
         import threading
         monitor_thread = threading.Thread(
-            target=monitor_grid_orders,
-            args=(client, email, symbol, order_pairs, grid_id)
+            target=monitor_grid_orders_with_error_handling,
+            args=(client, email, symbol, order_pairs, grid_id),
+            daemon=True
         )
-        monitor_thread.daemon = True
         monitor_thread.start()
+        
+        logger.info(f"网格监控线程已启动: grid_id={grid_id}, thread_id={monitor_thread.ident}, 请等待15秒完成首批订单监控")
         
         return jsonify({
             "success": True,
-            "message": "网格交易已提交并开始监控",
+            "message": "网格交易已提交并开始监控，成交订单将在15秒后检查并补齐不平衡部分",
             "data": {
                 "grid_id": grid_id,
                 "grid_orders": submitted_orders,
@@ -500,11 +520,29 @@ def submit_and_monitor_grid():
         })
     except Exception as e:
         db.session.rollback()
-        logger.error(f"创建网格交易失败: {str(e)}")
+        logger.error(f"创建网格交易失败: {str(e)}", exc_info=True)
         return jsonify({
             "success": False,
             "error": f"创建网格交易失败: {str(e)}"
         })
+
+def monitor_grid_orders_with_error_handling(client, email, symbol, order_pairs, grid_id):
+    """添加错误处理的包装函数"""
+    try:
+        logger.info(f"开始监控网格订单: grid_id={grid_id}, 订单对数量={len(order_pairs)}")
+        monitor_grid_orders(client, email, symbol, order_pairs, grid_id)
+        logger.info(f"网格订单监控正常完成: grid_id={grid_id}")
+    except Exception as e:
+        logger.error(f"网格订单监控异常终止: grid_id={grid_id}, 错误={str(e)}", exc_info=True)
+        # 尝试将异常状态记录到数据库
+        try:
+            grid = GridTrading.query.filter_by(grid_id=grid_id).first()
+            if grid:
+                grid.status = "ERROR"
+                grid.close_reason = f"监控异常: {str(e)}"
+                db.session.commit()
+        except Exception as db_error:
+            logger.error(f"更新网格状态失败: {str(db_error)}")
 
 # ========== 辅助函数 ==========
 
@@ -718,7 +756,6 @@ def place_real_order(client, order_data):
                 leverage=order_data['leverage'],
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
-                fee_recorded=False,
                 grid_id=order_data['grid_id']
             )
             
@@ -743,14 +780,25 @@ def monitor_grid_orders(client, email, symbol, order_pairs, grid_id):
     """
     监控网格订单状态，实现自动平衡功能
     
-    - 如果多（空）单成交但空（多）单未成交或部分成交，等待15秒后取消未成交的单并市价补齐
-    - 如果订单发生错误或过期，等待5秒后市价补齐
+    - 针对多空订单对，如果一方成交另一方未成交，等待15秒后取消并市价补齐
+    - 如果订单发生错误（拒绝、过期、取消），等待5秒后市价补齐
+    - 每对订单监控将等待至少15秒（或5秒），确保交易所有足够时间处理订单
+    
+    参数:
+    - client: BinanceClient实例
+    - email: 子账号邮箱
+    - symbol: 交易对
+    - order_pairs: 订单对列表
+    - grid_id: 网格ID
     """
     try:
         logger.info(f"开始监控网格订单 grid_id: {grid_id}, 订单对数量: {len(order_pairs)}")
+        logger.info(f"注意: 订单监控将等待15秒(普通订单)或5秒(错误订单)后再处理不平衡情况")
         
         # 对每对订单进行监控
         for pair_index, order_pair in enumerate(order_pairs):
+            logger.info(f"处理第{pair_index+1}对订单 (共{len(order_pairs)}对)")
+            
             # 双向交易有两个订单，单向只有一个
             if len(order_pair) == 2:
                 # 双向交易情况
@@ -759,25 +807,46 @@ def monitor_grid_orders(client, email, symbol, order_pairs, grid_id):
                 
                 if buy_order and sell_order:
                     # 监控订单对
+                    logger.info(f"监控买单{buy_order.get('order_id')}和卖单{sell_order.get('order_id')}")
                     monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id)
             
             elif len(order_pair) == 1:
                 # 单向交易情况，只需监控单个订单的状态
-                check_and_handle_single_order_status(client, email, symbol, order_pair[0], grid_id)
+                order = order_pair[0]
+                logger.info(f"监控单个订单: {order.get('side')}单 {order.get('order_id')}")
+                check_and_handle_single_order_status(client, email, symbol, order, grid_id)
+            
+            logger.info(f"第{pair_index+1}对订单处理完成")
         
-        logger.info(f"网格订单监控完成 grid_id: {grid_id}")
+        # 更新网格状态
+        try:
+            grid = GridTrading.query.filter_by(grid_id=grid_id).first()
+            if grid and grid.status != "ERROR":
+                grid.status = "COMPLETED"
+                db.session.commit()
+                logger.info(f"网格订单监控完成，已更新状态为COMPLETED: grid_id={grid_id}")
+        except Exception as db_error:
+            logger.error(f"更新网格状态失败: {str(db_error)}")
+            
+        logger.info(f"网格订单监控全部完成 grid_id: {grid_id}")
     except Exception as e:
-        logger.error(f"监控网格订单异常: {str(e)}")
+        logger.error(f"监控网格订单异常: {str(e)}", exc_info=True)
 
 def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
-    """监控一对买卖订单，处理不平衡情况"""
+    """监控一对买卖订单，处理不平衡情况
+    
+    - 如果多（空）单成交但空（多）单未成交或部分成交，则15秒后取消并市价补齐
+    - 如果订单发生错误或过期，5秒后市价补单
+    """
     try:
-        # 等待数据初始化
-        time.sleep(2)
-        
         # 查询初始订单状态
         buy_status = check_order_status(client, symbol, buy_order.get('order_id'))
         sell_status = check_order_status(client, symbol, sell_order.get('order_id'))
+        
+        logger.info(f"订单对初始状态 - Grid={grid_id}, Buy: {buy_status.get('status')}, Sell: {sell_status.get('status')}")
+        
+        # 记录开始时间
+        start_time = time.time()
         
         # 检查订单状态
         buy_filled = buy_status.get('status') == 'FILLED'
@@ -785,144 +854,218 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
         buy_error = buy_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']
         sell_error = sell_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']
         
-        start_time = time.time()
-        while time.time() - start_time < 15:  # 监控15秒
-            # 重新检查订单状态
+        # 设置监控时间
+        monitoring_time = 15  # 常规监控15秒
+        error_monitoring_time = 5  # 错误订单监控5秒
+        
+        # 如果订单已经处于错误状态，设置更短的监控时间
+        if buy_error or sell_error:
+            monitoring_time = error_monitoring_time
+            logger.info(f"检测到错误状态订单，设置{error_monitoring_time}秒监控时间")
+        
+        # 检查一方已成交另一方未成交的情况
+        one_side_filled = (buy_filled and not sell_filled) or (sell_filled and not buy_filled)
+        
+        if one_side_filled or buy_error or sell_error:
+            # 第一次检查就发现不平衡或错误，等待指定时间后继续处理
+            wait_time = monitoring_time
+            logger.info(f"检测到订单不平衡或错误，等待{wait_time}秒后处理")
+            
+            # 等待指定时间
+            time.sleep(wait_time)
+            
+            # 重新检查状态
             buy_status = check_order_status(client, symbol, buy_order.get('order_id'))
             sell_status = check_order_status(client, symbol, sell_order.get('order_id'))
             
-            # 更新状态
+            logger.info(f"等待{wait_time}秒后重新检查 - Buy: {buy_status.get('status')}, Sell: {sell_status.get('status')}")
+            
             buy_filled = buy_status.get('status') == 'FILLED'
             sell_filled = sell_status.get('status') == 'FILLED'
-            buy_error = buy_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']
-            sell_error = sell_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']
-            
-            # 买单成交但卖单未完全成交
-            if buy_filled and not sell_filled:
-                wait_seconds = 5 if sell_error else 15
-                if time.time() - start_time >= wait_seconds:
-                    # 取消现有卖单
-                    if not sell_error:
-                        cancel_order(client, symbol, sell_order.get('order_id'))
-                    
-                    # 获取卖单已成交数量
-                    executed_qty = float(sell_status.get('executedQty', 0))
-                    
-                    # 计算需要补齐的数量
-                    remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
-                    
-                    if remaining_qty > 0:
-                        # 市价卖出补齐
-                        market_sell(client, email, symbol, remaining_qty, grid_id)
-                    
-                    # 结束监控
-                    break
-            
-            # 卖单成交但买单未完全成交
-            elif sell_filled and not buy_filled:
-                wait_seconds = 5 if buy_error else 15
-                if time.time() - start_time >= wait_seconds:
-                    # 取消现有买单
-                    if not buy_error:
-                        cancel_order(client, symbol, buy_order.get('order_id'))
-                    
-                    # 获取买单已成交数量
-                    executed_qty = float(buy_status.get('executedQty', 0))
-                    
-                    # 计算需要补齐的数量
-                    remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
-                    
-                    if remaining_qty > 0:
-                        # 市价买入补齐
-                        market_buy(client, email, symbol, remaining_qty, grid_id)
-                    
-                    # 结束监控
-                    break
-            
-            # 两个订单都已完成或错误
-            elif (buy_filled and sell_filled) or (buy_error and sell_error):
-                # 两个订单都已完成，无需处理
-                logger.info(f"订单对已完成处理 - Grid: {grid_id}, Buy: {buy_order.get('order_id')}, Sell: {sell_order.get('order_id')}")
-                break
-            
-            # 如果订单有错误，处理错误情况
-            elif buy_error or sell_error:
-                # 错误订单需要等待5秒后处理
-                if time.time() - start_time >= 5:
-                    if buy_error:
-                        executed_qty = float(buy_status.get('executedQty', 0))
-                        remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
-                        if remaining_qty > 0:
-                            market_buy(client, email, symbol, remaining_qty, grid_id)
-                    
-                    if sell_error:
-                        executed_qty = float(sell_status.get('executedQty', 0))
-                        remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
-                        if remaining_qty > 0:
-                            market_sell(client, email, symbol, remaining_qty, grid_id)
-                    
-                    # 结束监控
-                    break
-            
-            # 继续监控
-            time.sleep(1)
         
-        # 如果达到最大监控时间但订单仍未成交，记录日志
-        if time.time() - start_time >= 15:
-            logger.info(f"订单监控超时 - Grid: {grid_id}, Buy: {buy_status.get('status')}, Sell: {sell_status.get('status')}")
+        # 处理逻辑：买单成交但卖单未完全成交
+        if buy_filled and not sell_filled:
+            logger.info(f"买单已成交但卖单未成交，取消卖单并市价补齐: {sell_order.get('order_id')}")
+            
+            # 取消卖单
+            cancel_result = cancel_order(client, symbol, sell_order.get('order_id'))
+            logger.info(f"取消卖单结果: {cancel_result}")
+            
+            # 获取最新状态
+            sell_status = check_order_status(client, symbol, sell_order.get('order_id'))
+            
+            # 计算需要补齐的数量
+            executed_qty = float(sell_status.get('executedQty', 0))
+            remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                logger.info(f"市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价卖出结果: {market_sell_result}")
+            else:
+                logger.info(f"卖单已成交数量: {executed_qty}，无需补齐")
         
+        # 处理逻辑：卖单成交但买单未完全成交
+        elif sell_filled and not buy_filled:
+            logger.info(f"卖单已成交但买单未成交，取消买单并市价补齐: {buy_order.get('order_id')}")
+            
+            # 取消买单
+            cancel_result = cancel_order(client, symbol, buy_order.get('order_id'))
+            logger.info(f"取消买单结果: {cancel_result}")
+            
+            # 获取最新状态
+            buy_status = check_order_status(client, symbol, buy_order.get('order_id'))
+            
+            # 计算需要补齐的数量
+            executed_qty = float(buy_status.get('executedQty', 0))
+            remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                logger.info(f"市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价买入结果: {market_buy_result}")
+            else:
+                logger.info(f"买单已成交数量: {executed_qty}，无需补齐")
+        
+        # 处理逻辑：两个订单都已完成
+        elif buy_filled and sell_filled:
+            logger.info(f"订单对都已成交完成: 买单={buy_status.get('status')}, 卖单={sell_status.get('status')}")
+            return
+        
+        # 处理错误状态的买单
+        if buy_error and not buy_filled:
+            executed_qty = float(buy_status.get('executedQty', 0))
+            remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                logger.info(f"买单错误状态，市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价买入结果: {market_buy_result}")
+        
+        # 处理错误状态的卖单
+        if sell_error and not sell_filled:
+            executed_qty = float(sell_status.get('executedQty', 0))
+            remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                logger.info(f"卖单错误状态，市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价卖出结果: {market_sell_result}")
+        
+        # 处理未完成的订单 - 这是最后的保障检查
+        # 重新获取最新状态
+        buy_status = check_order_status(client, symbol, buy_order.get('order_id'))
+        sell_status = check_order_status(client, symbol, sell_order.get('order_id'))
+        
+        # 处理未完成的买单
+        if buy_status.get('status') == 'NEW':
+            logger.info(f"买单仍未完成，最终取消并补齐: {buy_order.get('order_id')}")
+            cancel_result = cancel_order(client, symbol, buy_order.get('order_id'))
+            
+            # 计算需要补齐的数量
+            buy_status = check_order_status(client, symbol, buy_order.get('order_id'))
+            executed_qty = float(buy_status.get('executedQty', 0))
+            remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"最终市价买入结果: {market_buy_result}")
+        
+        # 处理未完成的卖单
+        if sell_status.get('status') == 'NEW':
+            logger.info(f"卖单仍未完成，最终取消并补齐: {sell_order.get('order_id')}")
+            cancel_result = cancel_order(client, symbol, sell_order.get('order_id'))
+            
+            # 计算需要补齐的数量
+            sell_status = check_order_status(client, symbol, sell_order.get('order_id'))
+            executed_qty = float(sell_status.get('executedQty', 0))
+            remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"最终市价卖出结果: {market_sell_result}")
+                
     except Exception as e:
-        logger.error(f"监控订单对异常: {str(e)}")
+        logger.error(f"监控订单对异常: {str(e)}", exc_info=True)
 
 def check_and_handle_single_order_status(client, email, symbol, order, grid_id):
-    """检查并处理单个订单的状态"""
+    """检查并处理单个订单的状态
+    
+    - 如果订单未成交，15秒后检查并取消订单后市价补齐
+    - 如果订单发生错误或过期，5秒后市价补单
+    """
     try:
-        # 等待数据初始化
-        time.sleep(2)
-        
         # 查询订单状态
         order_status = check_order_status(client, symbol, order.get('order_id'))
+        logger.info(f"单个订单状态 - Grid={grid_id}, Order={order.get('order_id')}, Status={order_status.get('status')}")
         
+        # 记录开始时间
         start_time = time.time()
-        max_wait_time = 15  # 最大等待时间15秒
         
-        # 如果是错误订单，最大等待时间减少到5秒
-        if order_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']:
-            max_wait_time = 5
+        # 如果订单已完成
+        if order_status.get('status') == 'FILLED':
+            logger.info(f"单个订单已完成 - Grid: {grid_id}, Order: {order.get('order_id')}")
+            return
         
-        # 监控直到达到最大等待时间
-        while time.time() - start_time < max_wait_time:
-            # 再次检查状态
+        # 设置监控时间
+        monitoring_time = 15  # 普通订单等待15秒
+        error_time = 5       # 错误订单等待5秒
+        
+        # 确定等待时间
+        wait_time = monitoring_time
+        is_error = order_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']
+        
+        if is_error:
+            wait_time = error_time
+            logger.info(f"检测到错误订单状态: {order_status.get('status')}，等待{wait_time}秒后处理")
+        else:
+            logger.info(f"订单未成交，等待{wait_time}秒后检查")
+        
+        # 等待指定时间
+        time.sleep(wait_time)
+        
+        # 重新检查订单状态
+        order_status = check_order_status(client, symbol, order.get('order_id'))
+        logger.info(f"等待{wait_time}秒后订单状态: {order_status.get('status')}")
+        
+        # 如果订单已成交，无需处理
+        if order_status.get('status') == 'FILLED':
+            logger.info(f"订单已完成，无需补单 - Grid: {grid_id}, Order: {order.get('order_id')}")
+            return
+        
+        # 处理未成交或错误订单
+        # 如果是NEW状态，先尝试取消
+        if order_status.get('status') == 'NEW':
+            logger.info(f"取消未成交订单: {order.get('order_id')}")
+            cancel_result = cancel_order(client, symbol, order.get('order_id'))
+            logger.info(f"取消订单结果: {cancel_result}")
+            
+            # 取消后再次检查状态
             order_status = check_order_status(client, symbol, order.get('order_id'))
+        
+        # 获取已成交数量
+        executed_qty = float(order_status.get('executedQty', 0))
+        
+        # 计算需要补齐的数量
+        remaining_qty = float(order.get('amount', 0)) - executed_qty
+        
+        if remaining_qty > 0:
+            logger.info(f"订单 {order.get('order_id')} 需要补齐数量: {remaining_qty}, 状态: {order_status.get('status')}")
             
-            # 如果订单已完成或不需要额外处理
-            if order_status.get('status') == 'FILLED':
-                logger.info(f"单个订单已完成 - Grid: {grid_id}, Order: {order.get('order_id')}")
-                return
-            
-            # 如果是错误订单或达到最大等待时间
-            if (order_status.get('status') in ['REJECTED', 'EXPIRED', 'CANCELED']) or (time.time() - start_time >= max_wait_time):
-                # 获取已成交数量
-                executed_qty = float(order_status.get('executedQty', 0))
-                
-                # 计算需要补齐的数量
-                remaining_qty = float(order.get('amount', 0)) - executed_qty
-                
-                if remaining_qty > 0:
-                    # 根据订单方向决定市价买入或卖出
-                    if order.get('side') == 'BUY':
-                        market_buy(client, email, symbol, remaining_qty, grid_id)
-                    else:
-                        market_sell(client, email, symbol, remaining_qty, grid_id)
-                
-                # 结束监控
-                break
-            
-            # 等待下一次检查
-            time.sleep(1)
+            # 根据订单方向决定市价买入或卖出
+            if order.get('side') == 'BUY':
+                logger.info(f"市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价买入结果: {market_buy_result}")
+            else:
+                logger.info(f"市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
+                logger.info(f"市价卖出结果: {market_sell_result}")
+        else:
+            logger.info(f"订单 {order.get('order_id')} 已成交数量: {executed_qty}，无需补齐")
         
     except Exception as e:
-        logger.error(f"处理单个订单异常: {str(e)}")
+        logger.error(f"处理单个订单异常: {str(e)}", exc_info=True)
 
 def check_order_status(client, symbol, order_id):
     """检查订单状态"""
@@ -939,10 +1082,11 @@ def check_order_status(client, symbol, order_id):
         if result.get('success'):
             return result.get('data', {})
         else:
-            logger.error(f"查询订单状态失败: {result.get('error')}")
-            return {'status': 'ERROR', 'error': result.get('error')}
+            error_msg = result.get('error', '未知错误')
+            logger.error(f"查询订单状态失败: orderId={order_id}, 错误={error_msg}")
+            return {'status': 'ERROR', 'error': error_msg}
     except Exception as e:
-        logger.error(f"查询订单状态异常: {str(e)}")
+        logger.error(f"查询订单状态异常: {str(e)}", exc_info=True)
         return {'status': 'ERROR', 'error': str(e)}
 
 def cancel_order(client, symbol, order_id):
@@ -954,39 +1098,112 @@ def cancel_order(client, symbol, order_id):
             'orderId': order_id
         }
         
+        logger.info(f"尝试取消订单: {symbol} orderId={order_id}")
+        
         # 发送取消请求
         result = client._send_request('DELETE', '/fapi/v1/order', signed=True, params=params)
         
         if result.get('success'):
             logger.info(f"成功取消订单: {order_id}")
-            return True
+            
+            # 更新数据库中订单状态
+            try:
+                order = OrderHistory.query.filter_by(order_id=str(order_id)).first()
+                if order:
+                    order.status = 'CANCELED'
+                    order.last_checked = datetime.utcnow()
+                    db.session.commit()
+                    logger.info(f"已更新数据库中订单 {order_id} 状态为CANCELED")
+            except Exception as db_error:
+                logger.error(f"更新订单状态失败: {str(db_error)}")
+            
+            return {
+                'success': True,
+                'data': result.get('data')
+            }
         else:
-            logger.error(f"取消订单失败: {result.get('error')}")
-            return False
+            error_msg = result.get('error', '未知错误')
+            logger.error(f"取消订单失败: orderId={order_id}, 错误={error_msg}")
+            return {
+                'success': False,
+                'error': error_msg
+            }
     except Exception as e:
-        logger.error(f"取消订单异常: {str(e)}")
-        return False
+        logger.error(f"取消订单异常: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 def market_buy(client, email, symbol, quantity, grid_id):
     """市价买入"""
     try:
+        # 记录原始请求
+        logger.info(f"准备市价买入: symbol={symbol}, quantity={quantity}, grid_id={grid_id}")
+        
+        # 获取账户余额检查
+        account_info = client._send_request('GET', '/fapi/v2/account', signed=True)
+        if not account_info.get('success'):
+            logger.error(f"获取账户信息失败: {account_info.get('error')}")
+            return {
+                'success': False,
+                'error': f"获取账户信息失败: {account_info.get('error')}"
+            }
+        
         # 根据交易对精度格式化数量
         formatted_quantity = format_quantity(client, symbol, quantity)
         logger.info(f"市价买入数量精度调整: 原始数量={quantity}, 调整后={formatted_quantity}")
         
-        # 设置市价买入参数
-        params = {
-            'symbol': symbol,
-            'side': 'BUY',
-            'type': 'MARKET',
-            'quantity': formatted_quantity
-        }
+        # 获取当前价格以检查名义价值
+        ticker_info = client._send_request('GET', '/fapi/v1/ticker/price', signed=False, params={'symbol': symbol})
+        if not ticker_info.get('success'):
+            logger.warning(f"获取{symbol}价格失败，无法检查名义价值: {ticker_info.get('error')}")
+        else:
+            current_price = float(ticker_info['data']['price'])
+            notional_value = formatted_quantity * current_price
+            logger.info(f"订单名义价值计算: 数量={formatted_quantity} × 价格={current_price} = {notional_value} USDT")
+            
+            # 检查名义价值是否小于最小要求(5 USDT)
+            if notional_value < 5:
+                logger.warning(f"订单名义价值({notional_value}USDT)小于最小要求(5USDT)")
+                # 尝试添加reduceOnly参数
+                params = {
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'type': 'MARKET',
+                    'quantity': formatted_quantity,
+                    'reduceOnly': 'true'  # 添加reduceOnly参数
+                }
+                logger.info(f"尝试使用reduceOnly参数进行市价买入: {params}")
+            else:
+                # 设置标准市价买入参数
+                params = {
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'type': 'MARKET',
+                    'quantity': formatted_quantity
+                }
+        
+        # 如果无法获取价格信息，使用默认参数
+        if 'params' not in locals():
+            params = {
+                'symbol': symbol,
+                'side': 'BUY',
+                'type': 'MARKET',
+                'quantity': formatted_quantity
+            }
         
         # 发送市价买入请求
         response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
+        # 如果第一次请求失败，尝试使用reduceOnly参数
+        if not response.get('success') and 'notional must be no smaller than' in str(response.get('error', '')):
+            logger.warning(f"市价买入失败(名义价值过小)，尝试使用reduceOnly参数: {response.get('error')}")
+            params['reduceOnly'] = 'true'
+            response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
+        
         if response.get('success'):
-            logger.info(f"市价买入成功: {symbol}, 数量: {formatted_quantity}")
+            logger.info(f"市价买入成功: {symbol}, 数量: {formatted_quantity}, 响应: {response['data']}")
             
             # 记录订单
             order_record = OrderHistory(
@@ -1003,7 +1220,6 @@ def market_buy(client, email, symbol, quantity, grid_id):
                 leverage=1,  # 使用默认杠杆
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
-                fee_recorded=False,
                 grid_id=grid_id,
                 remarks="自动平衡补单"
             )
@@ -1011,34 +1227,93 @@ def market_buy(client, email, symbol, quantity, grid_id):
             db.session.add(order_record)
             db.session.commit()
             
-            return True
+            return {
+                'success': True,
+                'data': response['data']
+            }
         else:
-            logger.error(f"市价买入失败: {response.get('error')}")
-            return False
+            error_msg = response.get('error', '未知错误')
+            logger.error(f"市价买入失败: 错误={error_msg}, 参数={params}")
+            return {
+                'success': False,
+                'error': error_msg
+            }
     except Exception as e:
-        logger.error(f"市价买入异常: {str(e)}")
-        return False
+        logger.error(f"市价买入异常: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 def market_sell(client, email, symbol, quantity, grid_id):
     """市价卖出"""
     try:
+        # 记录原始请求
+        logger.info(f"准备市价卖出: symbol={symbol}, quantity={quantity}, grid_id={grid_id}")
+        
+        # 获取账户持仓检查
+        positions_info = client._send_request('GET', '/fapi/v2/positionRisk', signed=True, params={'symbol': symbol})
+        if not positions_info.get('success'):
+            logger.error(f"获取持仓信息失败: {positions_info.get('error')}")
+            return {
+                'success': False,
+                'error': f"获取持仓信息失败: {positions_info.get('error')}"
+            }
+        
         # 根据交易对精度格式化数量
         formatted_quantity = format_quantity(client, symbol, quantity)
         logger.info(f"市价卖出数量精度调整: 原始数量={quantity}, 调整后={formatted_quantity}")
         
-        # 设置市价卖出参数
-        params = {
-            'symbol': symbol,
-            'side': 'SELL',
-            'type': 'MARKET',
-            'quantity': formatted_quantity
-        }
+        # 获取当前价格以检查名义价值
+        ticker_info = client._send_request('GET', '/fapi/v1/ticker/price', signed=False, params={'symbol': symbol})
+        if not ticker_info.get('success'):
+            logger.warning(f"获取{symbol}价格失败，无法检查名义价值: {ticker_info.get('error')}")
+        else:
+            current_price = float(ticker_info['data']['price'])
+            notional_value = formatted_quantity * current_price
+            logger.info(f"订单名义价值计算: 数量={formatted_quantity} × 价格={current_price} = {notional_value} USDT")
+            
+            # 检查名义价值是否小于最小要求(5 USDT)
+            if notional_value < 5:
+                logger.warning(f"订单名义价值({notional_value}USDT)小于最小要求(5USDT)")
+                # 尝试添加reduceOnly参数
+                params = {
+                    'symbol': symbol,
+                    'side': 'SELL',
+                    'type': 'MARKET',
+                    'quantity': formatted_quantity,
+                    'reduceOnly': 'true'  # 添加reduceOnly参数
+                }
+                logger.info(f"尝试使用reduceOnly参数进行市价卖出: {params}")
+            else:
+                # 设置标准市价卖出参数
+                params = {
+                    'symbol': symbol,
+                    'side': 'SELL',
+                    'type': 'MARKET',
+                    'quantity': formatted_quantity
+                }
+        
+        # 如果无法获取价格信息，使用默认参数
+        if 'params' not in locals():
+            params = {
+                'symbol': symbol,
+                'side': 'SELL',
+                'type': 'MARKET',
+                'quantity': formatted_quantity
+            }
         
         # 发送市价卖出请求
         response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
+        # 如果第一次请求失败，尝试使用reduceOnly参数
+        if not response.get('success') and 'notional must be no smaller than' in str(response.get('error', '')):
+            logger.warning(f"市价卖出失败(名义价值过小)，尝试使用reduceOnly参数: {response.get('error')}")
+            params['reduceOnly'] = 'true'
+            response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
+        
         if response.get('success'):
-            logger.info(f"市价卖出成功: {symbol}, 数量: {formatted_quantity}")
+            logger.info(f"市价卖出成功: {symbol}, 数量: {formatted_quantity}, 响应: {response['data']}")
             
             # 记录订单
             order_record = OrderHistory(
@@ -1055,7 +1330,6 @@ def market_sell(client, email, symbol, quantity, grid_id):
                 leverage=1,  # 使用默认杠杆
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
-                fee_recorded=False,
                 grid_id=grid_id,
                 remarks="自动平衡补单"
             )
@@ -1063,13 +1337,23 @@ def market_sell(client, email, symbol, quantity, grid_id):
             db.session.add(order_record)
             db.session.commit()
             
-            return True
+            return {
+                'success': True,
+                'data': response['data']
+            }
         else:
-            logger.error(f"市价卖出失败: {response.get('error')}")
-            return False
+            error_msg = response.get('error', '未知错误')
+            logger.error(f"市价卖出失败: 错误={error_msg}, 参数={params}")
+            return {
+                'success': False,
+                'error': error_msg
+            }
     except Exception as e:
-        logger.error(f"市价卖出异常: {str(e)}")
-        return False
+        logger.error(f"市价卖出异常: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 # ========== 订单历史API ==========
 
@@ -1124,11 +1408,6 @@ def record_order():
             order.executed_qty = executed_qty or order.executed_qty
             order.last_checked = datetime.utcnow()
             
-            # 如果订单状态变为已完成或部分完成且尚未记录手续费，则计算并记录手续费
-            if (status in ['FILLED', 'PARTIALLY_FILLED']) and not order.fee_recorded:
-                record_fee(order)
-                order.fee_recorded = True
-            
             db.session.commit()
             
             return jsonify({
@@ -1152,17 +1431,10 @@ def record_order():
                 leverage=leverage,
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
-                fee_recorded=False
             )
             
             db.session.add(new_order)
             db.session.commit()
-            
-            # 如果订单已完成或部分完成，则记录手续费
-            if status in ['FILLED', 'PARTIALLY_FILLED']:
-                record_fee(new_order)
-                new_order.fee_recorded = True
-                db.session.commit()
             
             return jsonify({
                 "success": True,
@@ -1314,50 +1586,6 @@ def get_recent_orders():
             "success": False,
             "error": f"获取最近订单列表失败: {str(e)}"
         })
-
-def record_fee(order):
-    """
-    记录订单手续费
-    
-    参数:
-    - order: 订单对象
-    """
-    try:
-        # 计算手续费
-        order_data = {
-            'symbol': order.symbol,
-            'order_type': order.order_type,
-            'product_type': 'SPOT',  # 默认现货
-            'amount': order.amount,
-            'price': order.price,
-            'status': order.status,
-            'is_maker': False  # 默认taker
-        }
-        
-        fee_result = calculate_order_fee(order_data)
-        
-        # 创建手续费记录
-        fee_record = FeeStatistics(
-            email=order.email,
-            order_id=order.order_id,
-            client_order_id=order.client_order_id,
-            symbol=order.symbol,
-            order_type=order.order_type,
-            side=order.side,
-            executed_qty=order.executed_qty,
-            price=order.price,
-            fee=fee_result['fee'],
-            fee_currency=order.symbol.split('USDT')[0] if 'USDT' in order.symbol else 'USDT',
-            fee_usdt=fee_result['fee_usdt'],
-            created_at=datetime.utcnow(),
-            order_created_at=order.created_at
-        )
-        
-        db.session.add(fee_record)
-        
-    except Exception as e:
-        logger.error(f"记录订单手续费失败: {str(e)}")
-        # 不抛出异常，让调用方可以继续处理 
 
 # ========== 精度处理辅助函数 ==========
 

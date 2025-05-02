@@ -40,9 +40,6 @@ def create_app(config_class=None):
     
     # 配置SQLAlchemy
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(data_dir, 'app.db')
-    app.config['SQLALCHEMY_BINDS'] = {
-        'fee_statistics': 'sqlite:///' + os.path.join(data_dir, 'fee_statistics.db')
-    }
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
     if config_class is None:
@@ -62,12 +59,11 @@ def create_app(config_class=None):
     with app.app_context():
         db.create_all()
     
-    # 启用CORS，配置更详细的参数
+    # 启用CORS，允许所有来源的跨域请求
     CORS(app, resources={r"/*": {
-        "origins": ["http://localhost:8080", "http://127.0.0.1:8080"], 
+        "origins": "*", 
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-        "supports_credentials": True
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
     }})
     
     # 注册API蓝图

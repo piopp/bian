@@ -76,7 +76,6 @@ class OrderHistory(db.Model):
     remarks = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_checked = db.Column(db.DateTime, nullable=True)
-    fee_recorded = db.Column(db.Boolean, default=False)
     
     def __repr__(self):
         return f"<OrderHistory {self.order_id}>"
@@ -101,8 +100,7 @@ class OrderHistory(db.Model):
             'grid_id': self.grid_id,
             'remarks': self.remarks,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'last_checked': self.last_checked.isoformat() if self.last_checked else None,
-            'fee_recorded': self.fee_recorded
+            'last_checked': self.last_checked.isoformat() if self.last_checked else None
         }
 
 class TradeHistory(db.Model):

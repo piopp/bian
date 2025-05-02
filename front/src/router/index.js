@@ -37,12 +37,6 @@ const routes = [
     component: TradingPairsView,
     meta: { requiresAuth: true }
   },
-  {
-    path: '/fee-statistics',
-    name: 'FeeStatistics',
-    component: () => import('../views/FeeStatistics.vue'),
-    meta: { requiresAuth: true }
-  },
   // 可以在这里添加更多路由
 ]
 
