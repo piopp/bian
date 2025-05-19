@@ -14,6 +14,13 @@ class Config:
     SESSION_TYPE = 'filesystem'
     SESSION_COOKIE_HTTPONLY = True
     
+    # JWT配置
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'binance_manager_jwt_secret')
+    JWT_TOKEN_LOCATION = ['headers']
+    JWT_HEADER_NAME = 'Authorization'
+    JWT_HEADER_TYPE = 'Bearer'
+    JWT_ACCESS_TOKEN_EXPIRES = 86400  # 24小时
+    
     # SQLAlchemy配置
     SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(DATA_DIR, 'app.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -33,6 +40,11 @@ class Config:
             PROXIES['http'] = os.environ.get('HTTP_PROXY')
         if os.environ.get('HTTPS_PROXY'):
             PROXIES['https'] = os.environ.get('HTTPS_PROXY')
+    
+    @classmethod
+    def init_app(cls, app):
+        """初始化应用配置的额外步骤"""
+        pass
     
     @classmethod
     def as_dict(cls):

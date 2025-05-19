@@ -1,64 +1,75 @@
 <template>
   <el-dialog
     v-model="dialogVisible"
-    :title="`子账户详情: ${account ? account.name : ''}`"
+    :title="`子账户详情: ${account ? account.email : ''}`"
     width="800px"
     :close-on-click-modal="false"
     :before-close="handleClose"
+    v-optimize-layout
   >
     <div v-if="loading" class="loading-container">
       <el-skeleton :rows="10" animated />
     </div>
     
-    <div v-else-if="account" class="account-details">
+    <div v-else-if="account" class="account-details" v-optimize-layout>
       <!-- 基本信息卡片 -->
-      <el-card class="detail-card">
+      <el-card class="detail-card" v-optimize-layout>
         <template #header>
           <div class="card-header">
             <span>基本信息</span>
             <el-tag 
-              :type="account.status === 'active' ? 'success' : 'danger'"
+              :type="getAccountStatus(account).type"
               effect="dark"
             >
-              {{ account.status === 'active' ? '活跃' : '禁用' }}
+              {{ getAccountStatus(account).text }}
             </el-tag>
           </div>
         </template>
         <div class="info-grid">
           <div class="info-item">
             <span class="label">子账户ID:</span>
-            <span class="value">{{ account.id }}</span>
+            <span class="value">{{ account.id || account.subAccountId || account.subaccountId || '无ID信息' }}</span>
           </div>
           <div class="info-item">
-            <span class="label">名称:</span>
-            <span class="value">{{ account.name }}</span>
+            <span class="label">邮箱:</span>
+            <span class="value">{{ account.email }}</span>
           </div>
           <div class="info-item">
-            <span class="label">账户类型:</span>
-            <el-tag :type="account.type === 'spot' ? 'success' : 'warning'" size="small">
-              {{ account.type === 'spot' ? '现货账户' : '期货账户' }}
+            <span class="label">账户状态:</span>
+            <el-tag :type="getAccountStatus(account).statusType" size="small">
+              {{ getAccountStatus(account).statusText }}
             </el-tag>
           </div>
           <div class="info-item">
             <span class="label">创建时间:</span>
-            <span class="value">{{ formatDate(account.createdAt) }}</span>
+            <span class="value">{{ formatDate(account.createTime) }}</span>
           </div>
           <div class="info-item">
-            <span class="label">最后活动:</span>
-            <span class="value">{{ formatDate(account.lastActive || account.createdAt) }}</span>
+            <span class="label">API配置:</span>
+            <el-tag :type="account.hasApiKey ? 'success' : 'info'" size="small">
+              {{ account.hasApiKey ? '已配置' : '未配置' }}
+            </el-tag>
           </div>
           <div class="info-item">
-            <span class="label">启用的功能:</span>
+            <span class="label">已启用功能:</span>
             <div class="features-list">
               <el-tag 
-                v-for="feature in account.features || []" 
-                :key="feature"
+                v-if="hasFeature(account, 'margin')"
                 size="small"
                 class="feature-tag"
+                type="success"
               >
-                {{ featureLabels[feature] || feature }}
+                保证金交易
               </el-tag>
-              <span v-if="!account.features || account.features.length === 0" class="no-features">
+              <el-tag 
+                v-if="hasFeature(account, 'futures')"
+                size="small"
+                class="feature-tag"
+                type="warning"
+              >
+                期货交易
+              </el-tag>
+              <span v-if="!hasFeature(account, 'margin') && !hasFeature(account, 'futures')" class="no-features">
                 无特殊功能
               </span>
             </div>
@@ -67,7 +78,7 @@
       </el-card>
       
       <!-- 资产信息卡片 -->
-      <el-card class="detail-card">
+      <el-card class="detail-card" v-optimize-layout>
         <template #header>
           <div class="card-header">
             <span>资产信息</span>
@@ -78,17 +89,15 @@
         </template>
         <div v-loading="assetsLoading" class="assets-section">
           <div v-if="assets.length > 0" class="assets-table">
-            <el-table :data="assets" style="width: 100%" border>
+            <el-table :data="assets" style="width: 100%" border v-optimize-layout>
               <el-table-column prop="asset" label="币种" width="80" />
               <el-table-column prop="free" label="可用余额" />
               <el-table-column prop="locked" label="锁定金额" />
-              <el-table-column prop="total" label="总计">
+              <el-table-column label="总计">
                 <template #default="scope">
                   {{ (Number(scope.row.free) + Number(scope.row.locked)).toFixed(8) }}
                 </template>
               </el-table-column>
-              <el-table-column prop="btcValue" label="BTC价值" />
-              <el-table-column prop="usdtValue" label="USDT价值" />
             </el-table>
             
             <div class="summary-section">
@@ -105,43 +114,18 @@
           <el-empty v-else description="无资产数据" />
         </div>
       </el-card>
-      
-      <!-- 操作记录卡片 -->
-      <el-card class="detail-card">
-        <template #header>
-          <div class="card-header">
-            <span>最近操作记录</span>
-            <el-button type="primary" size="small" @click="loadMoreLogs">
-              加载更多
-            </el-button>
-          </div>
-        </template>
-        <div v-loading="logsLoading" class="logs-section">
-          <div v-if="activityLogs.length > 0" class="logs-list">
-            <el-timeline>
-              <el-timeline-item
-                v-for="log in activityLogs"
-                :key="log.id"
-                :timestamp="formatDateTime(log.timestamp)"
-                :type="logTypeMap[log.type] || 'primary'"
-              >
-                <h4>{{ log.title }}</h4>
-                <p>{{ log.description }}</p>
-                <el-tag v-if="log.status" size="small" :type="log.status === 'success' ? 'success' : 'danger'">
-                  {{ log.status === 'success' ? '成功' : '失败' }}
-                </el-tag>
-              </el-timeline-item>
-            </el-timeline>
-          </div>
-          <el-empty v-else description="无操作记录" />
-        </div>
-      </el-card>
     </div>
     
     <template #footer>
       <div class="dialog-footer">
         <el-button @click="handleClose">关闭</el-button>
-        <el-button type="primary" @click="openTransferDialog">转账</el-button>
+        <el-button 
+          type="success" 
+          @click="openUnifiedAccount"
+          :disabled="!account"
+        >
+          统一账户管理
+        </el-button>
         <el-button 
           type="danger" 
           @click="openDeleteDialog"
@@ -155,9 +139,11 @@
 </template>
 
 <script>
-import { ref, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import axios from 'axios'
+import { debounce } from '../../utils/performance'
 
 export default {
   name: 'AccountDetailsDialog',
@@ -170,53 +156,33 @@ export default {
       type: Boolean,
       required: true
     },
-    // 账户ID
-    accountId: {
-      type: [Number, String],
+    // 账户邮箱
+    accountEmail: {
+      type: String,
       default: null
     }
   },
-  emits: ['update:modelValue', 'delete-account', 'transfer'],
+  emits: ['update:modelValue', 'delete-account', 'open-unified-account'],
   setup(props, { emit }) {
     const loading = ref(false)
     const account = ref(null)
     const assets = ref([])
     const assetsLoading = ref(false)
-    const activityLogs = ref([])
-    const logsLoading = ref(false)
-    const logsPage = ref(1)
-    
-    // 特性标签映射
-    const featureLabels = {
-      margin: '保证金交易',
-      futures: '期货交易',
-      options: '期权交易',
-      otc: '场外交易',
-      transfer: '内部转账',
-      api: 'API访问'
-    }
-    
-    // 日志类型映射到Element UI的类型
-    const logTypeMap = {
-      transfer: 'primary',
-      trade: 'success',
-      deposit: 'success',
-      withdraw: 'warning',
-      api: 'info',
-      system: 'info',
-      error: 'danger'
-    }
     
     // 计算总BTC价值
     const totalBtcValue = computed(() => {
-      const total = assets.value.reduce((sum, asset) => sum + Number(asset.btcValue || 0), 0)
-      return total.toFixed(8)
+      if (account.value && account.value.btcVal) {
+        return account.value.btcVal
+      }
+      return '0.00000000'
     })
     
     // 计算总USDT价值
     const totalUsdtValue = computed(() => {
-      const total = assets.value.reduce((sum, asset) => sum + Number(asset.usdtValue || 0), 0)
-      return total.toFixed(2)
+      if (account.value && account.value.usdtVal) {
+        return account.value.usdtVal
+      }
+      return '0.00'
     })
     
     // 计算对话框的可见性
@@ -225,241 +191,228 @@ export default {
       set: (value) => emit('update:modelValue', value)
     })
     
-    // 当accountId变化时，加载账户详情
-    watch(() => props.accountId, async (newId, oldId) => {
-      if (newId && newId !== oldId) {
-        await fetchAccountDetails(newId)
+    // 使用防抖处理数据加载
+    const debouncedFetchAccountDetails = debounce(async (email) => {
+      if (!email) return
+      
+      loading.value = true
+      try {
+        // 使用batch-details API获取子账户详情
+        const response = await axios.post('/api/subaccounts/batch-details', {
+          emails: [email],
+          recvWindow: 10000
+        })
+        
+        if (response.data.success) {
+          // 首先尝试从accounts数组获取数据
+          if (response.data.accounts && response.data.accounts.length > 0) {
+            account.value = response.data.accounts[0]
+          } 
+          // 如果accounts数组不存在或为空，尝试从results数组获取
+          else if (response.data.results && response.data.results.length > 0) {
+            const result = response.data.results[0]
+            if (result.success && result.details) {
+              // 如果结果中包含details字段，使用它
+              account.value = result.details
+            } else if (result.success) {
+              // 如果没有details但有其他字段，尝试构建账户对象
+              account.value = {
+                email: email,
+                ...result
+              }
+            } else {
+              ElMessage.error(`获取子账户详情失败: ${result.message || result.error || '未知错误'}`)
+              account.value = null
+            }
+          } 
+          // 如果data字段存在，尝试从中获取数据
+          else if (response.data.data && response.data.data.length > 0) {
+            const resultData = response.data.data[0]
+            if (resultData.details) {
+              account.value = resultData.details
+            } else if (resultData.success) {
+              account.value = {
+                email: email,
+                ...resultData
+              }
+            } else {
+              ElMessage.error(`获取子账户详情失败: ${resultData.message || resultData.error || '未知错误'}`)
+              account.value = null
+            }
+          } else {
+            ElMessage.error('获取子账户详情失败: 返回数据格式异常')
+            account.value = null
+          }
+        } else {
+          ElMessage.error(`获取子账户详情失败: ${response.data.message || '未知错误'}`)
+          account.value = null
+        }
+      } catch (error) {
+        console.error('获取子账户详情出错:', error)
+        ElMessage.error(`获取子账户详情失败: ${error.message || '未知错误'}`)
+        account.value = null
+      } finally {
+        loading.value = false
+      }
+    }, 300)
+    
+    // 当accountEmail变化时，加载账户详情
+    watch(() => props.accountEmail, (newEmail) => {
+      if (newEmail) {
+        debouncedFetchAccountDetails(newEmail)
       }
     })
     
     // 当对话框打开时，加载账户详情
-    watch(() => props.modelValue, async (newValue) => {
-      if (newValue && props.accountId) {
-        await fetchAccountDetails(props.accountId)
+    watch(() => props.modelValue, (newValue) => {
+      if (newValue && props.accountEmail) {
+        debouncedFetchAccountDetails(props.accountEmail)
       }
     })
     
     // 获取账户详情
-    const fetchAccountDetails = async (id) => {
-      loading.value = true
-      try {
-        // 模拟API调用
-        await new Promise(resolve => setTimeout(resolve, 800))
-        
-        // 模拟数据
-        account.value = {
-          id: id,
-          name: `sub_account_${id}`,
-          type: Math.random() > 0.5 ? 'spot' : 'futures',
-          createdAt: new Date(Date.now() - Math.floor(Math.random() * 10000000000)),
-          lastActive: new Date(Date.now() - Math.floor(Math.random() * 1000000000)),
-          status: Math.random() > 0.2 ? 'active' : 'disabled',
-          features: sampleFeatures()
-        }
-        
-        // 加载资产和日志
-        await Promise.all([
-          fetchAssets(),
-          fetchActivityLogs()
-        ])
-      } catch (error) {
-        console.error('获取账户详情失败:', error)
-        ElMessage.error('获取账户详情失败，请重试')
-      } finally {
-        loading.value = false
-      }
+    const fetchAccountDetails = async (email) => {
+      await debouncedFetchAccountDetails(email)
     }
     
-    // 获取资产数据
-    const fetchAssets = async () => {
-      if (!account.value) return
+    // 刷新资产信息
+    const refreshAssets = async () => {
+      if (!account.value || !account.value.email) return
       
       assetsLoading.value = true
       try {
-        // 模拟API调用
-        await new Promise(resolve => setTimeout(resolve, 600))
+        const response = await axios.get(`/api/subaccounts/balance?email=${account.value.email}`)
         
-        // 模拟数据
-        assets.value = [
-          {
-            asset: 'BTC',
-            free: (Math.random() * 0.5).toFixed(8),
-            locked: (Math.random() * 0.05).toFixed(8),
-            btcValue: (Math.random() * 0.5).toFixed(8),
-            usdtValue: (Math.random() * 15000).toFixed(2)
-          },
-          {
-            asset: 'ETH',
-            free: (Math.random() * 10).toFixed(8),
-            locked: (Math.random() * 1).toFixed(8),
-            btcValue: (Math.random() * 0.2).toFixed(8),
-            usdtValue: (Math.random() * 6000).toFixed(2)
-          },
-          {
-            asset: 'USDT',
-            free: (Math.random() * 10000).toFixed(2),
-            locked: (Math.random() * 1000).toFixed(2),
-            btcValue: (Math.random() * 0.1).toFixed(8),
-            usdtValue: (Math.random() * 3000).toFixed(2)
-          }
-        ]
+        if (response.data.success) {
+          assets.value = response.data.data || []
+        } else {
+          ElMessage.error(`获取资产信息失败: ${response.data.message || '未知错误'}`)
+        }
       } catch (error) {
-        console.error('获取资产数据失败:', error)
-        ElMessage.error('获取资产数据失败')
+        console.error('获取资产信息出错:', error)
+        ElMessage.error(`获取资产信息失败: ${error.message || '未知错误'}`)
       } finally {
         assetsLoading.value = false
       }
     }
     
-    // 刷新资产数据
-    const refreshAssets = async () => {
-      await fetchAssets()
-      ElMessage.success('资产数据已刷新')
-    }
-    
-    // 获取活动日志
-    const fetchActivityLogs = async (reset = true) => {
-      if (!account.value) return
-      
-      logsLoading.value = true
-      try {
-        // 模拟API调用
-        await new Promise(resolve => setTimeout(resolve, 500))
-        
-        // 如果是重置，则清空现有日志
-        if (reset) {
-          activityLogs.value = []
-          logsPage.value = 1
-        }
-        
-        // 模拟数据
-        const newLogs = [
-          {
-            id: Date.now() + 1,
-            title: '内部转账',
-            description: `从主账户转入 0.5 BTC`,
-            type: 'transfer',
-            status: 'success',
-            timestamp: new Date(Date.now() - Math.floor(Math.random() * 86400000))
-          },
-          {
-            id: Date.now() + 2,
-            title: 'API密钥创建',
-            description: '创建了新的API密钥用于交易',
-            type: 'api',
-            status: 'success',
-            timestamp: new Date(Date.now() - Math.floor(Math.random() * 86400000 * 2))
-          },
-          {
-            id: Date.now() + 3,
-            title: '提现请求',
-            description: '尝试提现 0.1 BTC 到外部钱包',
-            type: 'withdraw',
-            status: Math.random() > 0.5 ? 'success' : 'failed',
-            timestamp: new Date(Date.now() - Math.floor(Math.random() * 86400000 * 3))
-          }
-        ]
-        
-        // 添加新日志到现有日志列表
-        activityLogs.value = [...activityLogs.value, ...newLogs]
-        logsPage.value++
-      } catch (error) {
-        console.error('获取活动日志失败:', error)
-        ElMessage.error('获取活动日志失败')
-      } finally {
-        logsLoading.value = false
-      }
-    }
-    
-    // 加载更多日志
-    const loadMoreLogs = () => {
-      fetchActivityLogs(false)
+    // 关闭对话框
+    const handleClose = () => {
+      dialogVisible.value = false
     }
     
     // 打开删除对话框
     const openDeleteDialog = () => {
-      if (!account.value) return
-      emit('delete-account', account.value)
+      if (!account.value || !account.value.email) {
+        ElMessage.warning('账户信息不完整，无法删除')
+        return
+      }
+      
+      ElMessageBox.confirm(
+        `确定要删除子账户 ${account.value.email} 吗？此操作不可恢复!`,
+        '删除确认',
+        {
+          confirmButtonText: '确定删除',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
+        .then(() => {
+          emit('delete-account', account.value.email)
+          dialogVisible.value = false
+        })
+        .catch(() => {
+          // 用户取消删除，不执行任何操作
+        })
     }
     
-    // 打开转账对话框
-    const openTransferDialog = () => {
-      if (!account.value) return
-      emit('transfer', account.value)
-    }
-    
-    // 关闭对话框
-    const handleClose = () => {
+    // 打开统一账户管理
+    const openUnifiedAccount = () => {
+      if (!account.value || !account.value.email) {
+        ElMessage.warning('账户信息不完整，无法打开统一账户管理')
+        return
+      }
+      
+      emit('open-unified-account', account.value)
       dialogVisible.value = false
-      // 等待对话框关闭动画后清空数据
-      setTimeout(() => {
-        account.value = null
-        assets.value = []
-        activityLogs.value = []
-      }, 300)
     }
     
     // 格式化日期
-    const formatDate = (date) => {
-      if (!date) return '-'
-      return new Date(date).toLocaleDateString('zh-CN')
-    }
-    
-    // 格式化日期和时间
-    const formatDateTime = (date) => {
-      if (!date) return '-'
-      return new Date(date).toLocaleString('zh-CN')
-    }
-    
-    // 随机选择特性
-    const sampleFeatures = () => {
-      const allFeatures = Object.keys(featureLabels)
-      const count = Math.floor(Math.random() * 4) // 0-3个特性
-      const selected = []
+    const formatDate = (dateString) => {
+      if (!dateString) return '未知'
       
-      for (let i = 0; i < count; i++) {
-        const feature = allFeatures[Math.floor(Math.random() * allFeatures.length)]
-        if (!selected.includes(feature)) {
-          selected.push(feature)
-        }
+      try {
+        const date = new Date(dateString)
+        return date.toLocaleString()
+      } catch (e) {
+        return dateString
+      }
+    }
+    
+    // 获取账户状态
+    const getAccountStatus = (account) => {
+      if (!account) return { type: 'info', text: '未知', statusType: 'info', statusText: '未知' }
+      
+      // 检查账户状态
+      const status = account.status || 'UNKNOWN'
+      
+      // 状态映射
+      const statusMap = {
+        'ENABLED': { type: 'success', text: '已启用', statusType: 'success', statusText: '已启用' },
+        'DISABLED': { type: 'danger', text: '已禁用', statusType: 'danger', statusText: '已禁用' },
+        'PENDING': { type: 'warning', text: '待处理', statusType: 'warning', statusText: '待处理' },
+        'UNKNOWN': { type: 'info', text: '未知', statusType: 'info', statusText: '未知' }
       }
       
-      return selected
+      return statusMap[status] || statusMap['UNKNOWN']
     }
     
+    // 检查账户是否具有特定功能
+    const hasFeature = (account, feature) => {
+      if (!account) return false
+      
+      // 检查features数组
+      if (account.features && Array.isArray(account.features)) {
+        return account.features.includes(feature)
+      }
+      
+      // 检查特定字段
+      if (feature === 'margin' && account.isMarginEnabled) return true
+      if (feature === 'futures' && account.isFuturesEnabled) return true
+      
+      return false
+    }
+    
+    // 组件挂载时
+    onMounted(() => {
+      // 如果初始有账户邮箱，加载详情
+      if (props.accountEmail) {
+        debouncedFetchAccountDetails(props.accountEmail)
+      }
+    })
+    
     return {
-      dialogVisible,
       loading,
       account,
       assets,
       assetsLoading,
-      activityLogs,
-      logsLoading,
-      featureLabels,
-      logTypeMap,
       totalBtcValue,
       totalUsdtValue,
-      handleClose,
+      dialogVisible,
       fetchAccountDetails,
-      fetchAssets,
       refreshAssets,
-      fetchActivityLogs,
-      loadMoreLogs,
+      handleClose,
       openDeleteDialog,
-      openTransferDialog,
+      openUnifiedAccount,
       formatDate,
-      formatDateTime
+      getAccountStatus,
+      hasFeature
     }
   }
 }
 </script>
 
 <style scoped>
-.loading-container {
-  padding: 20px;
-  min-height: 300px;
-}
-
 .account-details {
   display: flex;
   flex-direction: column;
@@ -468,85 +421,99 @@ export default {
 
 .detail-card {
   margin-bottom: 0;
+  /* 减少布局抖动 */
+  contain: content;
+  will-change: transform;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-weight: bold;
 }
 
 .info-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 15px;
+  gap: 16px;
 }
 
 .info-item {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .label {
-  font-size: 12px;
-  color: #909399;
+  font-size: 14px;
+  color: #606266;
 }
 
 .value {
   font-size: 14px;
   color: #303133;
+  word-break: break-all;
 }
 
 .features-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 8px;
 }
 
 .feature-tag {
-  margin-right: 5px;
+  margin-right: 4px;
 }
 
 .no-features {
-  font-size: 12px;
   color: #909399;
-  font-style: italic;
+  font-size: 14px;
 }
 
-.assets-section, .logs-section {
+.assets-section {
   min-height: 200px;
+}
+
+.assets-table {
+  margin-bottom: 16px;
 }
 
 .summary-section {
   display: flex;
   justify-content: flex-end;
-  gap: 20px;
-  margin-top: 15px;
-  padding: 10px;
-  background-color: #f7f7f7;
-  border-radius: 4px;
+  gap: 24px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #EBEEF5;
 }
 
 .summary-item {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-item .label {
+  font-weight: 500;
 }
 
 .summary-item .value {
-  font-weight: bold;
-  color: #409eff;
+  font-weight: 600;
+  color: #409EFF;
 }
 
-.logs-list {
-  margin-top: 10px;
+.loading-container {
+  padding: 20px;
 }
 
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+/* 添加过渡效果 */
+.account-details {
+  transition: opacity 0.3s ease;
+}
+
+/* 优化表格渲染 */
+.el-table {
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 </style> 

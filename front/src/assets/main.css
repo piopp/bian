@@ -1,0 +1,115 @@
+/* 全局样式 */
+:root {
+  --primary-color: #409EFF;
+  --success-color: #67C23A;
+  --warning-color: #E6A23C;
+  --danger-color: #F56C6C;
+  --info-color: #909399;
+  --text-color: #303133;
+  --border-color: #DCDFE6;
+  --background-color: #F5F7FA;
+}
+
+/* 基础样式重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--text-color);
+  background-color: var(--background-color);
+  line-height: 1.5;
+}
+
+/* 通用容器样式 */
+.container-fluid {
+  padding: 1rem;
+}
+
+/* 卡片样式 */
+.el-card {
+  margin-bottom: 1rem;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* 表单样式 */
+.form-section {
+  padding: 1rem;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+/* 表格样式 */
+.el-table {
+  margin: 1rem 0;
+}
+
+/* 按钮样式 */
+.el-button {
+  margin-right: 0.5rem;
+}
+
+.el-button:last-child {
+  margin-right: 0;
+}
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+  .container-fluid {
+    padding: 0.5rem;
+  }
+  
+  .el-card {
+    margin-bottom: 0.5rem;
+  }
+}
+
+/* 加载状态样式 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+}
+
+/* 错误消息样式 */
+.error-message {
+  color: var(--danger-color);
+  margin: 0.5rem 0;
+}
+
+/* 成功消息样式 */
+.success-message {
+  color: var(--success-color);
+  margin: 0.5rem 0;
+}
+
+/* 警告消息样式 */
+.warning-message {
+  color: var(--warning-color);
+  margin: 0.5rem 0;
+}
+
+/* 信息消息样式 */
+.info-message {
+  color: var(--info-color);
+  margin: 0.5rem 0;
+} 

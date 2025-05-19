@@ -1,45 +1,10 @@
-from flask import Flask
-from flask_cors import CORS
-from flask_jwt_extended import JWTManager
-from flask_sqlalchemy import SQLAlchemy
-from app.config import config
+"""
+应用初始化
+注意：此文件保留向后兼容，实际初始化在app/__init__.py中
+"""
 
-# 初始化扩展
-db = SQLAlchemy()
-jwt = JWTManager()
+# 导入真正的初始化函数
+from app import create_app
 
-def create_app(config_name='default'):
-    app = Flask(__name__)
-    app.config.from_object(config[config_name])
-    
-    # 初始化应用日志
-    config[config_name].init_app(app)
-    
-    # 初始化扩展
-    db.init_app(app)
-    jwt.init_app(app)
-    CORS(app)
-    
-    # 导入蓝图
-    from app.api.users import users_bp
-    from app.api.system import system_bp
-    from app.api.subaccounts import subaccounts_bp
-    from app.api.positions import positions_bp
-    from app.api.trading_pairs import trading_pairs_bp
-    from app.api.trades import trades_bp
-    from app.api.orders import orders_bp
-    from app.api.settings import settings_bp
-    
-    # 注册蓝图
-    app.register_blueprint(users_bp)
-    app.register_blueprint(system_bp)
-    app.register_blueprint(subaccounts_bp)
-    app.register_blueprint(positions_bp)
-    app.register_blueprint(trading_pairs_bp)
-    app.register_blueprint(trades_bp)
-    app.register_blueprint(orders_bp)
-    app.register_blueprint(settings_bp)
-    
-    return app
-
+# 创建应用实例，用于直接运行此文件时使用
 app = create_app() 

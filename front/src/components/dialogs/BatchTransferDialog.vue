@@ -1,6 +1,6 @@
 <template>
   <el-dialog
-    title="批量转账"
+    :title="props.activateMode ? '批量激活账户' : '批量转账'"
     v-model="dialogVisible"
     width="600px"
     :close-on-click-modal="false"
@@ -16,6 +16,17 @@
         {{ account.email }}
       </el-tag>
       <el-tag v-if="hasMoreAccounts" class="account-tag" type="info">...</el-tag>
+    </div>
+
+    <div v-if="props.activateMode" class="activation-info">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+      >
+        <p>批量激活账户将向每个所选账户转入相同数量的资产。</p>
+        <p>推荐转入 <strong>USDT</strong> 或 <strong>BTC</strong> 等主流币种。</p>
+      </el-alert>
     </div>
 
     <el-divider></el-divider>
@@ -77,7 +88,7 @@
       <div class="dialog-footer">
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" @click="batchTransfer" :loading="loading">
-          批量转账 ({{selectedAccounts.length}}个账号)
+          {{ props.activateMode ? '批量激活账户' : '批量转账' }} ({{selectedAccounts.length}}个账号)
         </el-button>
       </div>
     </template>
@@ -85,7 +96,7 @@
 </template>
 
 <script>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getCurrentUser } from '../../services/auth'
 
@@ -99,6 +110,10 @@ export default {
     selectedAccounts: {
       type: Array,
       default: () => []
+    },
+    activateMode: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['update:visible', 'success'],
@@ -126,10 +141,10 @@ export default {
     
     // 常用币种列表
     const commonCoins = [
-      { label: 'BTC - 比特币', value: 'BTC' },
-      { label: 'ETH - 以太坊', value: 'ETH' },
       { label: 'USDT - 泰达币', value: 'USDT' },
+      { label: 'BTC - 比特币', value: 'BTC' },
       { label: 'BNB - 币安币', value: 'BNB' },
+      { label: 'ETH - 以太坊', value: 'ETH' },
       { label: 'SOL - 索拉纳', value: 'SOL' },
       { label: 'ADA - 艾达币', value: 'ADA' },
       { label: 'XRP - 瑞波币', value: 'XRP' },
@@ -143,6 +158,16 @@ export default {
       amount: '',
       direction: 'toSubAccounts'
     })
+    
+    // 如果是激活模式，设置推荐的激活金额
+    watch(() => props.visible, (newVal) => {
+      if (newVal && props.activateMode) {
+        form.value.asset = 'USDT';
+        form.value.amount = '50';
+        form.value.distributionMethod = 'fixed';
+        form.value.direction = 'toSubAccounts';
+      }
+    });
     
     // 表单验证规则
     const rules = {
@@ -202,15 +227,17 @@ export default {
         
         try {
           // 二次确认
-          const confirmMessage = form.value.direction === 'toSubAccounts'
-            ? `确认要向 ${props.selectedAccounts.length} 个子账号${form.value.distributionMethod === 'equal' ? '平均' : '每人'}转入 ${form.value.distributionMethod === 'equal' ? form.value.amount : perAccountAmount.value} ${form.value.asset}?`
-            : `确认要从 ${props.selectedAccounts.length} 个子账号${form.value.distributionMethod === 'equal' ? '平均' : '每人'}转出 ${form.value.distributionMethod === 'equal' ? form.value.amount : perAccountAmount.value} ${form.value.asset}?`
+          const confirmMessage = props.activateMode
+            ? `确认要向 ${props.selectedAccounts.length} 个子账号每人转入 ${perAccountAmount.value} ${form.value.asset} 以激活账户?`
+            : (form.value.direction === 'toSubAccounts'
+              ? `确认要向 ${props.selectedAccounts.length} 个子账号${form.value.distributionMethod === 'equal' ? '平均' : '每人'}转入 ${form.value.distributionMethod === 'equal' ? form.value.amount : perAccountAmount.value} ${form.value.asset}?`
+              : `确认要从 ${props.selectedAccounts.length} 个子账号${form.value.distributionMethod === 'equal' ? '平均' : '每人'}转出 ${form.value.distributionMethod === 'equal' ? form.value.amount : perAccountAmount.value} ${form.value.asset}?`)
           
           await ElMessageBox.confirm(
             confirmMessage,
-            '批量转账确认',
+            props.activateMode ? '批量激活账户确认' : '批量转账确认',
             {
-              confirmButtonText: '确认转账',
+              confirmButtonText: props.activateMode ? '确认激活' : '确认转账',
               cancelButtonText: '取消',
               type: 'warning'
             }
@@ -263,11 +290,20 @@ export default {
             });
             
             if (result.success_count === props.selectedAccounts.length) {
-              ElMessage.success(`已成功向${result.success_count}个子账号完成转账`);
+              const successMsg = props.activateMode 
+                ? `已成功激活 ${result.success_count} 个子账号`
+                : `已成功向 ${result.success_count} 个子账号完成转账`;
+              ElMessage.success(successMsg);
             } else if (result.success_count > 0) {
-              ElMessage.warning(`转账部分成功: ${result.success_count}个成功, ${result.fail_count}个失败`);
+              const partialMsg = props.activateMode
+                ? `部分激活成功: ${result.success_count}个成功, ${result.fail_count}个失败`
+                : `转账部分成功: ${result.success_count}个成功, ${result.fail_count}个失败`;
+              ElMessage.warning(partialMsg);
             } else {
-              ElMessage.error(`所有转账都失败了，请检查账号余额和权限`);
+              const failureMsg = props.activateMode
+                ? `所有账号激活都失败了，请检查账号余额和权限`
+                : `所有转账都失败了，请检查账号余额和权限`;
+              ElMessage.error(failureMsg);
             }
           } else {
             ElMessage.error(result.error || '批量转账操作失败，请重试');
@@ -292,7 +328,8 @@ export default {
       hasMoreAccounts,
       perAccountAmount,
       totalAmount,
-      batchTransfer
+      batchTransfer,
+      props
     }
   }
 }
@@ -320,5 +357,9 @@ export default {
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
+}
+
+.activation-info {
+  margin-bottom: 15px;
 }
 </style> 

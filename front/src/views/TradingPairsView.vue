@@ -337,8 +337,8 @@ export default {
 
         let response;
         if (isEditMode.value) {
-          // 更新
-          response = await axios.put(`/api/trading-pairs/${form.id}`, formData);
+          // 更新 - 修改URL以匹配后端路由格式
+          response = await axios.put(`/api/trading-pairs/update/${form.id}`, formData);
         } else {
           // 新增
           response = await axios.post('/api/trading-pairs/add', formData);

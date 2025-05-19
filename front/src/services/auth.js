@@ -34,8 +34,8 @@ export const login = async (username, password) => {
       userId: result.data.id,
       // 添加令牌，如果后端返回了令牌则使用，否则使用用户ID作为简单令牌
       token: result.data.token || `user_${result.data.id}`,
-      // 添加过期时间（默认1小时）
-      exp: Date.now() + 3600000
+      // 添加过期时间（默认30天）
+      exp: Date.now() + 2592000000
     };
     
     // 存储用户信息到localStorage

@@ -1,12 +1,18 @@
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timedelta
-from app.models import db, GridTrading, OrderHistory, TradeHistory
+from app.models import db, GridTrading, OrderHistory, TradeHistory, MarginOrder, MarginTrade, FeeRecord
 import math
 import json
 import logging
 import time
-from app.api.subaccounts import get_sub_account_api_credentials
-from app.services.binance_client import BinanceClient
+from app.services.binance_client import BinanceClient, get_sub_account_api_credentials, get_client_by_email
+from app.models.account import SubAccountAPISettings
+from binance.exceptions import BinanceAPIException
+from binance.client import Client
+from binance.enums import ORDER_TYPE_MARKET
+from binance.enums import SIDE_BUY, SIDE_SELL
+from app.api.auth import login_required, authenticated_user
+from app.models.user import User, APIKey
 
 logger = logging.getLogger(__name__)
 trading_bp = Blueprint('trading', __name__, url_prefix='/api/trading')
@@ -834,9 +840,11 @@ def monitor_grid_orders(client, email, symbol, order_pairs, grid_id):
 
 def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
     """监控一对买卖订单，处理不平衡情况
-    
-    - 如果多（空）单成交但空（多）单未成交或部分成交，则15秒后取消并市价补齐
-    - 如果订单发生错误或过期，5秒后市价补单
+        
+    - 如果多仓（买单）成交但空仓（卖单）未成交或部分成交，补齐卖单（开仓）
+    - 如果空仓（卖单）成交但多仓（买单）未成交或部分成交，补齐买单（开仓）
+    - 如果订单发生错误或过期，市价补单
+    - 注意：所有操作都是开仓，不是平仓互抵
     """
     try:
         # 查询初始订单状态
@@ -882,10 +890,10 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             
             buy_filled = buy_status.get('status') == 'FILLED'
             sell_filled = sell_status.get('status') == 'FILLED'
-        
-        # 处理逻辑：买单成交但卖单未完全成交
+            
+        # 处理逻辑：买单成交但卖单未完全成交（补齐卖单开仓）
         if buy_filled and not sell_filled:
-            logger.info(f"买单已成交但卖单未成交，取消卖单并市价补齐: {sell_order.get('order_id')}")
+            logger.info(f"买单已成交但卖单未成交，取消卖单并市价开仓补齐: {sell_order.get('order_id')}")
             
             # 取消卖单
             cancel_result = cancel_order(client, symbol, sell_order.get('order_id'))
@@ -899,15 +907,15 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
             
             if remaining_qty > 0:
-                logger.info(f"市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                logger.info(f"市价卖出开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
                 market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价卖出结果: {market_sell_result}")
+                logger.info(f"市价卖出开仓结果: {market_sell_result}")
             else:
                 logger.info(f"卖单已成交数量: {executed_qty}，无需补齐")
         
-        # 处理逻辑：卖单成交但买单未完全成交
+        # 处理逻辑：卖单成交但买单未完全成交（补齐买单开仓）
         elif sell_filled and not buy_filled:
-            logger.info(f"卖单已成交但买单未成交，取消买单并市价补齐: {buy_order.get('order_id')}")
+            logger.info(f"卖单已成交但买单未成交，取消买单并市价开仓补齐: {buy_order.get('order_id')}")
             
             # 取消买单
             cancel_result = cancel_order(client, symbol, buy_order.get('order_id'))
@@ -921,9 +929,9 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
             
             if remaining_qty > 0:
-                logger.info(f"市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                logger.info(f"市价买入开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
                 market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价买入结果: {market_buy_result}")
+                logger.info(f"市价买入开仓结果: {market_buy_result}")
             else:
                 logger.info(f"买单已成交数量: {executed_qty}，无需补齐")
         
@@ -938,19 +946,19 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             remaining_qty = float(buy_order.get('amount', 0)) - executed_qty
             
             if remaining_qty > 0:
-                logger.info(f"买单错误状态，市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                logger.info(f"买单错误状态，市价买入开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
                 market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价买入结果: {market_buy_result}")
-        
+                logger.info(f"市价买入开仓结果: {market_buy_result}")
+                    
         # 处理错误状态的卖单
         if sell_error and not sell_filled:
             executed_qty = float(sell_status.get('executedQty', 0))
             remaining_qty = float(sell_order.get('amount', 0)) - executed_qty
             
             if remaining_qty > 0:
-                logger.info(f"卖单错误状态，市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                logger.info(f"卖单错误状态，市价卖出开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
                 market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价卖出结果: {market_sell_result}")
+                logger.info(f"市价卖出开仓结果: {market_sell_result}")
         
         # 处理未完成的订单 - 这是最后的保障检查
         # 重新获取最新状态
@@ -959,7 +967,7 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
         
         # 处理未完成的买单
         if buy_status.get('status') == 'NEW':
-            logger.info(f"买单仍未完成，最终取消并补齐: {buy_order.get('order_id')}")
+            logger.info(f"买单仍未完成，最终取消并开仓补齐: {buy_order.get('order_id')}")
             cancel_result = cancel_order(client, symbol, buy_order.get('order_id'))
             
             # 计算需要补齐的数量
@@ -969,11 +977,11 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             
             if remaining_qty > 0:
                 market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"最终市价买入结果: {market_buy_result}")
+                logger.info(f"最终市价买入开仓结果: {market_buy_result}")
         
         # 处理未完成的卖单
         if sell_status.get('status') == 'NEW':
-            logger.info(f"卖单仍未完成，最终取消并补齐: {sell_order.get('order_id')}")
+            logger.info(f"卖单仍未完成，最终取消并开仓补齐: {sell_order.get('order_id')}")
             cancel_result = cancel_order(client, symbol, sell_order.get('order_id'))
             
             # 计算需要补齐的数量
@@ -983,16 +991,17 @@ def monitor_order_pair(client, email, symbol, buy_order, sell_order, grid_id):
             
             if remaining_qty > 0:
                 market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"最终市价卖出结果: {market_sell_result}")
-                
+                logger.info(f"最终市价卖出开仓结果: {market_sell_result}")
+        
     except Exception as e:
         logger.error(f"监控订单对异常: {str(e)}", exc_info=True)
 
 def check_and_handle_single_order_status(client, email, symbol, order, grid_id):
     """检查并处理单个订单的状态
-    
+        
     - 如果订单未成交，15秒后检查并取消订单后市价补齐
     - 如果订单发生错误或过期，5秒后市价补单
+    - 注意：所有操作都是网格开仓，不是平仓
     """
     try:
         # 查询订单状态
@@ -1042,27 +1051,27 @@ def check_and_handle_single_order_status(client, email, symbol, order, grid_id):
             
             # 取消后再次检查状态
             order_status = check_order_status(client, symbol, order.get('order_id'))
-        
-        # 获取已成交数量
-        executed_qty = float(order_status.get('executedQty', 0))
-        
-        # 计算需要补齐的数量
-        remaining_qty = float(order.get('amount', 0)) - executed_qty
-        
-        if remaining_qty > 0:
-            logger.info(f"订单 {order.get('order_id')} 需要补齐数量: {remaining_qty}, 状态: {order_status.get('status')}")
             
-            # 根据订单方向决定市价买入或卖出
-            if order.get('side') == 'BUY':
-                logger.info(f"市价买入补齐: {remaining_qty} {symbol.replace('USDT', '')}")
-                market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价买入结果: {market_buy_result}")
+            # 获取已成交数量
+            executed_qty = float(order_status.get('executedQty', 0))
+            
+            # 计算需要补齐的数量
+            remaining_qty = float(order.get('amount', 0)) - executed_qty
+            
+            if remaining_qty > 0:
+                logger.info(f"订单 {order.get('order_id')} 需要补齐数量: {remaining_qty}, 状态: {order_status.get('status')}")
+                
+                # 根据订单方向决定市价买入或卖出 - 作为开仓操作
+                if order.get('side') == 'BUY':
+                    logger.info(f"市价买入开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                    market_buy_result = market_buy(client, email, symbol, remaining_qty, grid_id)
+                    logger.info(f"市价买入开仓结果: {market_buy_result}")
+                else:
+                    logger.info(f"市价卖出开仓补齐: {remaining_qty} {symbol.replace('USDT', '')}")
+                    market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
+                    logger.info(f"市价卖出开仓结果: {market_sell_result}")
             else:
-                logger.info(f"市价卖出补齐: {remaining_qty} {symbol.replace('USDT', '')}")
-                market_sell_result = market_sell(client, email, symbol, remaining_qty, grid_id)
-                logger.info(f"市价卖出结果: {market_sell_result}")
-        else:
-            logger.info(f"订单 {order.get('order_id')} 已成交数量: {executed_qty}，无需补齐")
+                logger.info(f"订单 {order.get('order_id')} 已成交数量: {executed_qty}，无需补齐")
         
     except Exception as e:
         logger.error(f"处理单个订单异常: {str(e)}", exc_info=True)
@@ -1166,41 +1175,26 @@ def market_buy(client, email, symbol, quantity, grid_id):
             # 检查名义价值是否小于最小要求(5 USDT)
             if notional_value < 5:
                 logger.warning(f"订单名义价值({notional_value}USDT)小于最小要求(5USDT)")
-                # 尝试添加reduceOnly参数
-                params = {
-                    'symbol': symbol,
-                    'side': 'BUY',
-                    'type': 'MARKET',
+        
+        # 设置标准市价买入参数 - 确保是开仓操作，不使用reduceOnly
+        params = {
+            'symbol': symbol,
+            'side': 'BUY',
+            'type': 'MARKET',
                     'quantity': formatted_quantity,
-                    'reduceOnly': 'true'  # 添加reduceOnly参数
-                }
-                logger.info(f"尝试使用reduceOnly参数进行市价买入: {params}")
-            else:
-                # 设置标准市价买入参数
-                params = {
-                    'symbol': symbol,
-                    'side': 'BUY',
-                    'type': 'MARKET',
-                    'quantity': formatted_quantity
+            'reduceOnly': 'false'  # 确保不是平仓操作
                 }
         
-        # 如果无法获取价格信息，使用默认参数
-        if 'params' not in locals():
-            params = {
-                'symbol': symbol,
-                'side': 'BUY',
-                'type': 'MARKET',
-                'quantity': formatted_quantity
-            }
+        logger.info(f"开仓参数设置: {params}")
         
         # 发送市价买入请求
         response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
-        # 如果第一次请求失败，尝试使用reduceOnly参数
-        if not response.get('success') and 'notional must be no smaller than' in str(response.get('error', '')):
-            logger.warning(f"市价买入失败(名义价值过小)，尝试使用reduceOnly参数: {response.get('error')}")
-            params['reduceOnly'] = 'true'
-            response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
+        # 如果第一次请求失败，尝试不带reduceOnly参数
+        if not response.get('success'):
+            logger.warning(f"市价买入失败，尝试不带reduceOnly参数: {response.get('error')}")
+            del params['reduceOnly']  # 删除reduceOnly参数
+        response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
         if response.get('success'):
             logger.info(f"市价买入成功: {symbol}, 数量: {formatted_quantity}, 响应: {response['data']}")
@@ -1221,7 +1215,7 @@ def market_buy(client, email, symbol, quantity, grid_id):
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
                 grid_id=grid_id,
-                remarks="自动平衡补单"
+                remarks="网格开仓-自动买入"
             )
             
             db.session.add(order_record)
@@ -1276,41 +1270,26 @@ def market_sell(client, email, symbol, quantity, grid_id):
             # 检查名义价值是否小于最小要求(5 USDT)
             if notional_value < 5:
                 logger.warning(f"订单名义价值({notional_value}USDT)小于最小要求(5USDT)")
-                # 尝试添加reduceOnly参数
-                params = {
-                    'symbol': symbol,
-                    'side': 'SELL',
-                    'type': 'MARKET',
-                    'quantity': formatted_quantity,
-                    'reduceOnly': 'true'  # 添加reduceOnly参数
-                }
-                logger.info(f"尝试使用reduceOnly参数进行市价卖出: {params}")
-            else:
-                # 设置标准市价卖出参数
-                params = {
-                    'symbol': symbol,
-                    'side': 'SELL',
-                    'type': 'MARKET',
-                    'quantity': formatted_quantity
-                }
         
-        # 如果无法获取价格信息，使用默认参数
-        if 'params' not in locals():
-            params = {
-                'symbol': symbol,
-                'side': 'SELL',
-                'type': 'MARKET',
-                'quantity': formatted_quantity
-            }
+        # 设置标准市价卖出参数 - 确保是开仓操作，不使用reduceOnly
+        params = {
+            'symbol': symbol,
+            'side': 'SELL',
+            'type': 'MARKET',
+                    'quantity': formatted_quantity,
+            'reduceOnly': 'false'  # 确保不是平仓操作
+        }
+        
+        logger.info(f"开仓参数设置: {params}")
         
         # 发送市价卖出请求
         response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
-        # 如果第一次请求失败，尝试使用reduceOnly参数
-        if not response.get('success') and 'notional must be no smaller than' in str(response.get('error', '')):
-            logger.warning(f"市价卖出失败(名义价值过小)，尝试使用reduceOnly参数: {response.get('error')}")
-            params['reduceOnly'] = 'true'
-            response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
+        # 如果第一次请求失败，尝试不带reduceOnly参数
+        if not response.get('success'):
+            logger.warning(f"市价卖出失败，尝试不带reduceOnly参数: {response.get('error')}")
+            del params['reduceOnly']  # 删除reduceOnly参数
+        response = client._send_request('POST', '/fapi/v1/order', signed=True, params=params)
         
         if response.get('success'):
             logger.info(f"市价卖出成功: {symbol}, 数量: {formatted_quantity}, 响应: {response['data']}")
@@ -1331,7 +1310,7 @@ def market_sell(client, email, symbol, quantity, grid_id):
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
                 grid_id=grid_id,
-                remarks="自动平衡补单"
+                remarks="网格开仓-自动卖出"
             )
             
             db.session.add(order_record)
@@ -1432,10 +1411,8 @@ def record_order():
                 created_at=datetime.utcnow(),
                 last_checked=datetime.utcnow(),
             )
-            
             db.session.add(new_order)
             db.session.commit()
-            
             return jsonify({
                 "success": True,
                 "message": "订单记录已创建",
@@ -1451,7 +1428,7 @@ def record_order():
 @trading_bp.route('/orders/list', methods=['GET'])
 def get_order_list():
     """
-    获取订单历史列表
+    获取订单历史列表 - 使用子账号API查询交易历史
     
     查询参数:
     - page: 页码 (默认1)
@@ -1472,41 +1449,103 @@ def get_order_list():
         start_date = request.args.get('startDate')
         end_date = request.args.get('endDate')
         
-        # 构建查询条件
-        query = OrderHistory.query
+        # 如果没有提供end_date，使用当前日期
+        if not end_date:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            
+        # 验证必要参数
+        if not email:
+            return jsonify({
+                "success": False,
+                "error": "请提供子账号邮箱参数"
+            }), 400
         
-        if email:
-            query = query.filter(OrderHistory.email == email)
+        # 获取子账号的API客户端
+        from app.services.binance_client import get_client_by_email
+        client = get_client_by_email(email)
         
+        if not client:
+            return jsonify({
+                "success": False,
+                "error": "子账号API未配置或不可用"
+            }), 400
+        
+        # 设置参数
+        params = {}
         if symbol:
-            query = query.filter(OrderHistory.symbol == symbol)
-        
-        if status:
-            query = query.filter(OrderHistory.status == status)
+            params['symbol'] = symbol
         
         # 添加日期范围查询
         if start_date:
-            query = query.filter(OrderHistory.created_at >= datetime.strptime(start_date, '%Y-%m-%d'))
+            start_timestamp = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp() * 1000)
+            params['startTime'] = start_timestamp
         
         if end_date:
             # 加一天以包含当天
-            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-            query = query.filter(OrderHistory.created_at < end_date_obj)
+            end_timestamp = int((datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)).timestamp() * 1000)
+            params['endTime'] = end_timestamp
         
-        # 计算总记录数
-        total_count = query.count()
+        # 设置分页
+        params['limit'] = page_size
+        if page > 1 and not status: # 仅在未指定status过滤时使用fromId
+            params['fromId'] = (page - 1) * page_size
+
+        response = None
         
-        # 排序和分页
-        query = query.order_by(OrderHistory.created_at.desc())
-        orders = query.paginate(page=page, per_page=page_size, error_out=False).items
+        # 优先尝试使用统一账户API获取交易历史
+        try:
+            logger.info(f"尝试使用统一账户API获取子账号 {email} 的交易历史")
+            # 第一种方法：尝试使用统一账户杠杆接口
+            response = client.get_unified_account_trades(**params)
         
-        # 转换为字典列表
-        order_list = [order.to_dict() for order in orders]
+            # 检查响应
+            if not response or not response.get('success') or not response.get('data'):
+                logger.info(f"统一账户杠杆接口无返回数据，尝试使用UM合约接口")
+                # 第二种方法：尝试使用统一账户UM合约接口
+                response = client.get_um_trades(**params)
+        except Exception as e:
+            logger.error(f"使用统一账户API获取交易历史失败: {str(e)}")
+            response = None
+            
+        # 如果统一账户API都失败，尝试使用传统的U本位合约API
+        if not response or not response.get('success') or not response.get('data'):
+            logger.info(f"尝试使用U本位合约API获取子账号 {email} 的交易历史")
+            u_futures_endpoint = "/fapi/v1/userTrades"
+            response = client._send_request('GET', u_futures_endpoint, signed=True, params=params)
+                
+        if not response or not response.get('success'):
+            return jsonify({
+                "success": False,
+                "error": response.get('error', '获取交易历史失败')
+            }), 400
+        
+        trades_data = response.get('data', [])
+        
+        # 计算总记录数 (可能不准确，因为币安API可能有限制)
+        total_count = len(trades_data)
+        
+        # 转换为前端需要的格式
+        trade_list = []
+        for trade in trades_data:
+            trade_dict = {
+                "id": trade.get('id'),
+                "orderId": trade.get('orderId'),
+                "symbol": trade.get('symbol'),
+                "side": '买入' if trade.get('isBuyer') else '卖出',
+                "price": trade.get('price'),
+                "qty": trade.get('qty'),
+                "commission": trade.get('commission'),
+                "commissionAsset": trade.get('commissionAsset'),
+                "time": datetime.fromtimestamp(trade.get('time', 0) / 1000).strftime('%Y-%m-%d %H:%M:%S'),
+                "isMaker": trade.get('isMaker'),
+                "isBestMatch": trade.get('isBestMatch'),
+            }
+            trade_list.append(trade_dict)
         
         return jsonify({
             "success": True,
             "data": {
-                "records": order_list,
+                "records": trade_list,
                 "total": total_count,
                 "page": page,
                 "pageSize": page_size
@@ -1724,3 +1763,421 @@ def format_price(client, symbol, price):
     precision = get_price_precision(client, symbol)
     formatted_price = float(f"{{:.{precision}f}}".format(float(price)))
     return formatted_price 
+
+# 杠杆交易相关API
+
+@trading_bp.route('/margin/account', methods=['POST'])
+def get_margin_account():
+    """获取杠杆账户信息"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数: email'
+            })
+        
+        # 验证子账号是否属于当前用户
+        current_user = authenticated_user()
+        if not current_user:
+            return jsonify({
+                'success': False,
+                'error': '用户未认证'
+            })
+        
+        user_id = current_user.get('id')
+        
+        # 检查子账号API设置是否存在
+        api_setting = db.session.query(SubAccountAPISettings).filter_by(
+            email=email
+        ).first()
+        
+        if not api_setting:
+            return jsonify({
+                'success': False,
+                'error': '子账号不存在'
+            })
+        
+        # 验证API设置是否有效
+        if not api_setting.api_key or not api_setting.api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API设置未配置'
+            })
+        
+        # 创建Binance客户端
+        client = Client(api_setting.api_key, api_setting.api_secret)
+        
+        # 获取杠杆账户信息
+        margin_account = client.get_margin_account()
+        
+        return jsonify({
+            'success': True,
+            'data': margin_account
+        })
+        
+    except BinanceAPIException as e:
+        logger.error(f"获取杠杆账户信息失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"币安API错误: {e.message}"
+        })
+    except Exception as e:
+        logger.error(f"获取杠杆账户信息失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"获取杠杆账户信息失败: {str(e)}"
+        })
+
+
+@trading_bp.route('/margin/order', methods=['POST'])
+def place_margin_order():
+    """提交杠杆交易订单"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        symbol = data.get('symbol')
+        side = data.get('side')  # BUY 或 SELL
+        amount = data.get('amount')  # 交易金额(USDT)
+        
+        if not all([email, symbol, side, amount]):
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数: email, symbol, side, amount'
+            })
+        
+        # 验证参数
+        if side not in ['BUY', 'SELL']:
+            return jsonify({
+                'success': False,
+                'error': '交易方向参数错误，必须为BUY或SELL'
+            })
+        
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                raise ValueError("金额必须大于0")
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': '金额格式错误'
+            })
+        
+        # 验证子账号是否属于当前用户
+        current_user = authenticated_user()
+        if not current_user:
+            return jsonify({
+                'success': False,
+                'error': '用户未认证'
+            })
+        
+        user_id = current_user.get('id')
+        
+        # 检查子账号API设置是否存在
+        api_setting = db.session.query(SubAccountAPISettings).filter_by(
+            email=email
+        ).first()
+        
+        if not api_setting:
+            return jsonify({
+                'success': False,
+                'error': '子账号不存在'
+            })
+        
+        # 验证API设置是否有效
+        if not api_setting.api_key or not api_setting.api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API设置未配置'
+            })
+        
+        # 创建Binance客户端
+        client = Client(api_setting.api_key, api_setting.api_secret)
+        
+        # 获取当前市场价格
+        ticker_price = client.get_symbol_ticker(symbol=symbol)
+        current_price = float(ticker_price['price'])
+        
+        # 计算可以购买/卖出的数量
+        quantity = amount / current_price
+        
+        # 获取交易对信息，确定小数位数
+        exchange_info = client.get_exchange_info()
+        symbol_info = next((s for s in exchange_info['symbols'] if s['symbol'] == symbol), None)
+        
+        if not symbol_info:
+            return jsonify({
+                'success': False,
+                'error': f'无法获取交易对 {symbol} 的信息'
+            })
+        
+        # 查找数量精度规则
+        lot_size_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
+        
+        if lot_size_filter:
+            step_size = float(lot_size_filter['stepSize'])
+            precision = 0
+            if step_size < 1:
+                precision = len(str(step_size).split('.')[-1].rstrip('0'))
+            quantity = round(quantity - (quantity % step_size), precision)
+        
+        # 确保数量满足最小交易量要求
+        min_qty = float(lot_size_filter['minQty']) if lot_size_filter else 0
+        if quantity < min_qty:
+            return jsonify({
+                'success': False,
+                'error': f'交易数量 {quantity} 小于最小交易量 {min_qty}'
+            })
+        
+        logger.info(f"准备提交杠杆交易订单: 子账号={email}, 交易对={symbol}, 方向={side}, 金额={amount}USDT, 数量={quantity}, 当前价格={current_price}")
+        
+        # 提交杠杆市价订单
+        order = client.create_margin_order(
+            symbol=symbol,
+            side=side,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity,
+            sideEffectType='NO_SIDE_EFFECT'  # 不自动借贷
+        )
+        
+        logger.info(f"杠杆交易订单提交成功: {order}")
+        
+        # 不再存储完整的订单信息，仅记录订单ID和基本信息
+        # 处理交易费用信息 - 调用API获取交易详情并记录手续费
+        try:
+            # 等待短暂时间，确保交易已经处理
+            time.sleep(1)
+            
+            # 获取订单信息
+            trades = client.get_margin_trades(symbol=symbol)
+            
+            # 查找与当前订单相关的交易
+            order_trades = [trade for trade in trades if str(trade.get('orderId')) == str(order.get('orderId'))]
+            
+            # 记录手续费信息
+            for trade in order_trades:
+                fee_record = FeeRecord(
+                    email=email,
+                    symbol=symbol,
+                    order_id=str(trade.get('orderId')),
+                    fee_amount=float(trade.get('commission', 0)),
+                    fee_asset=trade.get('commissionAsset', ''),
+                    source='MARGIN',
+                    description=f"杠杆{side}单手续费",
+                    trade_time=datetime.fromtimestamp(trade.get('time', 0) / 1000)
+                )
+                db.session.add(fee_record)
+                
+            db.session.commit()
+            logger.info(f"已记录交易手续费信息: 订单ID={order.get('orderId')}")
+            
+        except Exception as fee_error:
+            logger.error(f"记录手续费失败: {fee_error}")
+            # 即使获取手续费失败，也不影响整个交易流程
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'orderId': order['orderId'],
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'price': current_price,
+                'amount': amount,
+                'message': "订单已提交，仅记录手续费信息",
+            }
+        })
+        
+    except BinanceAPIException as e:
+        logger.error(f"提交杠杆交易订单失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"币安API错误: {e.message}"
+        })
+    except Exception as e:
+        logger.error(f"提交杠杆交易订单失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"提交杠杆交易订单失败: {str(e)}"
+        })
+
+
+@trading_bp.route('/margin/history', methods=['POST'])
+def get_margin_history():
+    """获取杠杆交易历史"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数: email'
+            })
+        
+        # 验证子账号是否属于当前用户
+        current_user = authenticated_user()
+        if not current_user:
+            return jsonify({
+                'success': False,
+                'error': '用户未认证'
+            })
+        
+        user_id = current_user.get('id')
+        
+        # 检查子账号API设置是否存在
+        api_setting = db.session.query(SubAccountAPISettings).filter_by(
+            email=email
+        ).first()
+        
+        if not api_setting:
+            return jsonify({
+                'success': False,
+                'error': '子账号不存在'
+            })
+        
+        # 验证API设置是否有效
+        if not api_setting.api_key or not api_setting.api_secret:
+            return jsonify({
+                'success': False,
+                'error': '子账号API设置未配置'
+            })
+        
+        # 创建Binance客户端
+        client = Client(api_setting.api_key, api_setting.api_secret)
+        
+        # 获取杠杆账户交易历史
+        margin_trades = client.get_margin_trades()
+        
+        # 处理交易历史数据
+        processed_trades = []
+        for trade in margin_trades:
+            processed_trades.append({
+                'email': email,
+                'symbol': trade['symbol'],
+                'id': trade['id'],
+                'orderId': trade['orderId'],
+                'price': trade['price'],
+                'quantity': trade['qty'],
+                'amount': float(trade['price']) * float(trade['qty']),
+                'commission': trade['commission'],
+                'commissionAsset': trade['commissionAsset'],
+                'time': trade['time'],
+                'isBuyer': trade['isBuyer'],
+                'isMaker': trade['isMaker'],
+                'side': 'BUY' if trade['isBuyer'] else 'SELL'
+            })
+        
+        return jsonify({
+            'success': True,
+            'data': processed_trades
+        })
+        
+    except BinanceAPIException as e:
+        logger.error(f"获取杠杆交易历史失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"币安API错误: {e.message}"
+        })
+    except Exception as e:
+        logger.error(f"获取杠杆交易历史失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"获取杠杆交易历史失败: {str(e)}"
+        })
+
+# 添加获取手续费记录的API
+@trading_bp.route('/fee-records', methods=['GET'])
+@login_required
+def get_fee_records():
+    """获取交易手续费记录"""
+    try:
+        # 处理查询参数
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('pageSize', 20))
+        email = request.args.get('email')
+        symbol = request.args.get('symbol')
+        source = request.args.get('source')  # 手续费来源过滤
+        start_date = request.args.get('startDate')
+        end_date = request.args.get('endDate')
+        
+        # 构建查询条件
+        query = FeeRecord.query
+        
+        # 验证当前用户只能查询自己的子账号
+        current_user = authenticated_user()
+        if not current_user:
+            return jsonify({
+                'success': False,
+                'error': '用户未认证'
+            })
+        
+        user_id = current_user.get('id')
+        
+        if email:
+            # 验证子账号是否存在，使用SubAccountAPISettings检查
+            api_setting = db.session.query(SubAccountAPISettings).filter_by(
+                email=email
+            ).first()
+            
+            if not api_setting:
+                return jsonify({
+                    'success': False,
+                    'error': '子账号不存在'
+                })
+            
+            query = query.filter(FeeRecord.email == email)
+        
+        if symbol:
+            query = query.filter(FeeRecord.symbol == symbol)
+        
+        if source:
+            query = query.filter(FeeRecord.source == source)
+        
+        # 添加日期范围查询
+        if start_date:
+            query = query.filter(FeeRecord.trade_time >= datetime.strptime(start_date, '%Y-%m-%d'))
+        
+        if end_date:
+            # 加一天以包含当天
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(FeeRecord.trade_time < end_date_obj)
+        
+        # 计算总记录数
+        total_count = query.count()
+        
+        # 排序和分页
+        query = query.order_by(FeeRecord.trade_time.desc())
+        fees = query.paginate(page=page, per_page=page_size, error_out=False).items
+        
+        # 转换为字典列表
+        fee_list = [fee.to_dict() for fee in fees]
+        
+        # 计算汇总统计
+        summary = {}
+        if fee_list:
+            # 按资产类型汇总手续费
+            for fee in query.all():  # 获取所有符合条件的记录
+                asset = fee.fee_asset
+                if asset not in summary:
+                    summary[asset] = 0
+                summary[asset] += fee.fee_amount
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'records': fee_list,
+                'total': total_count,
+                'page': page,
+                'pageSize': page_size,
+                'summary': summary
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取手续费记录失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f"获取手续费记录失败: {str(e)}"
+        })

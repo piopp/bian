@@ -81,6 +81,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useUserStore } from '@/stores/userStore'
 
 export default {
   name: 'BatchCreateDialog',
@@ -98,6 +99,9 @@ export default {
     const loading = ref(false)
     // 上传文件列表
     const fileList = ref([])
+    
+    // 获取主账号store
+    const userStore = useUserStore()
     
     // 计算属性: 对话框可见性
     const dialogVisible = computed({
@@ -150,6 +154,33 @@ export default {
         
         try {
           loading.value = true
+
+          // 获取用户信息
+          let currentUser = null;
+          let userId = null;
+          
+          // 优先从userStore获取主账号ID
+          if (userStore.hasMainAccount) {
+            userId = userStore.mainAccountId;
+            console.log('从userStore获取到主账号ID:', userId);
+          } else {
+            // 尝试从auth服务获取
+            try {
+              // 导入auth服务并获取当前用户信息
+              currentUser = await import('@/services/auth').then(module => module.getCurrentUser());
+              if (currentUser && currentUser.id) {
+                userId = currentUser.id;
+                console.log('从auth服务获取到用户ID:', userId);
+                
+                // 将ID保存到store中
+                userStore.setMainAccount(userId, currentUser.email || currentUser.username || '');
+              } else {
+                console.warn('未能获取用户ID，将使用默认值');
+              }
+            } catch (error) {
+              console.error('获取用户信息失败:', error);
+            }
+          }
           
           // 获取服务器时间
           let serverTimestamp = Date.now(); // 默认使用本地时间
@@ -171,8 +202,16 @@ export default {
             count: form.value.count, // 创建数量
             accountType: form.value.accountType, // 账号类型
             features: form.value.features, // 需要开通的功能
-            timestamp: serverTimestamp
+            timestamp: serverTimestamp,
+            user_id: userId // 添加用户ID参数
           };
+          
+          console.log('批量创建子账号请求数据:', requestData);
+          
+          // 如果currentUser不存在，重新获取
+          if (!currentUser) {
+            currentUser = await import('@/services/auth').then(module => module.getCurrentUser());
+          }
           
           // 如果有Excel文件，需要使用FormData
           if (form.value.excelFile) {
@@ -183,6 +222,9 @@ export default {
             // 调用上传Excel的API
             const response = await fetch('/api/subaccounts/import-excel', {
               method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${currentUser?.token || ''}`
+              },
               body: formData
             });
             
@@ -200,15 +242,18 @@ export default {
                 failCount: result.data?.fail_count || 0
               });
               
-              ElMessage.success(`成功批量创建了 ${result.data?.success_count || 0}/${result.data?.count || form.value.count} 个子账号`);
+              ElMessage.success(`已成功导入${result.data?.success_count || 0}个子账号`);
             } else {
-              ElMessage.error(result.error || '批量导入Excel创建子账号失败');
+              ElMessage.error(result.error || '批量导入子账号失败，请重试');
             }
           } else {
-            // 正常批量创建
-            const response = await fetch('/api/subaccounts/batch-create', {
+            // 直接调用批量创建API
+            const response = await fetch('/api/subaccounts/batch', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentUser?.token || ''}`
+              },
               body: JSON.stringify(requestData)
             });
             
@@ -217,18 +262,16 @@ export default {
             if (result.success) {
               dialogVisible.value = false;
               formRef.value.resetFields();
-              fileList.value = [];
               
               emit('success', {
                 count: form.value.count,
                 accountType: form.value.accountType,
-                successCount: result.success_count || 0,
-                failCount: result.fail_count || 0
+                accounts: result.data?.accounts || []
               });
               
-              ElMessage.success(`成功批量创建了 ${result.success_count || 0}/${result.total || form.value.count} 个子账号`);
+              ElMessage.success(`成功创建${result.data?.success_count || form.value.count}个子账号`);
             } else {
-              ElMessage.error(result.error || '批量创建子账号失败');
+              ElMessage.error(result.error || '批量创建子账号失败，请重试');
             }
           }
         } catch (error) {

@@ -160,10 +160,11 @@
 </template>
 
 <script>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled, QuestionFilled, Check, Delete, Timer, View, Hide, Key as key, Lock as lock } from '@element-plus/icons-vue'
 import { getCurrentUser } from '../services/auth'
+import { syncWithServer, getSyncStatus, getLastSyncTime, getCorrectedDate } from '../services/timeSync'
 
 // 使用相对路径代替硬编码URL，这样请求会被vue.config.js中的代理配置处理
 const API_URL = '/api';
@@ -196,6 +197,8 @@ export default {
       { name: '服务器时间', value: '-' },
       { name: '时间偏移', value: '- 毫秒' }
     ])
+    const lastSyncTime = ref(null) // 上次同步时间
+    const syncInterval = ref(null) // 保存定时器引用
     
     // 表单验证规则
     const rules = {
@@ -221,8 +224,14 @@ export default {
         }
         
         // 使用用户ID而非用户名获取主账号API设置
-        const userId = user.userId || user.id;
+        const userId = user.id;  // 直接使用id字段
         console.log('正在获取API设置，用户ID:', userId);
+        
+        if (!userId) {
+          console.error('无法获取用户ID');
+          ElMessage.error('无法获取用户ID，请重新登录');
+          return;
+        }
         
         const response = await fetch(`${API_URL}/settings/api-keys/${userId}`, {
           headers: {
@@ -365,43 +374,60 @@ export default {
     // 同步服务器时间
     const syncServerTime = async () => {
       try {
-        const startTime = Date.now();
-        const response = await fetch(`${API_URL}/server/time`);
-        const data = await response.json();
-        const endTime = Date.now();
+        showTimeStatus.value = false;
+        loading.value = true;
         
-        console.log('服务器时间响应:', data);
+        // 使用时间同步服务
+        const syncResult = await syncWithServer();
         
-        if (!data.success) {
-          throw new Error(data.error || '获取服务器时间失败');
+        if (!syncResult.success) {
+          throw new Error(syncResult.message || '同步币安服务器时间失败');
         }
         
+        // 获取同步状态
+        // eslint-disable-next-line no-unused-vars
+        const status = getSyncStatus();
+        const correctedDate = getCorrectedDate();
         const localTime = new Date().toLocaleString();
-        const serverTime = new Date(data.data.timestamp).toLocaleString();
-        
-        // 计算网络延迟 (请求往返时间的一半)
-        const networkLatency = Math.round((endTime - startTime) / 2);
-        
-        // 计算本地时间和服务器时间的偏差
-        const offset = data.data.timestamp - (startTime + networkLatency);
+        const serverTime = correctedDate.toLocaleString();
         
         timeData.value = [
           { name: '本地时间', value: localTime },
           { name: '服务器时间', value: serverTime },
-          { name: '时间来源', value: data.data.timezone || '服务器' },
-          { name: '时间偏移', value: `${offset} 毫秒` },
-          { name: '网络延迟', value: `${networkLatency} 毫秒` }
+          { name: '时间来源', value: status.source === 'binance' ? '币安服务器' : '服务器(后备)' },
+          { name: '时间偏移', value: `${status.offset} 毫秒` },
+          { name: '网络延迟', value: `${status.latency || 0} 毫秒` },
+          { name: '上次同步', value: status.timestamp.toLocaleString() }
         ];
         
-        if (Math.abs(offset) > 1000) {
+        if (Math.abs(status.offset) > 1000) {
           // 如果时间偏差超过1秒，给出警告
-          ElMessage.warning(`本地时间与服务器时间偏差较大(${offset}毫秒)，可能影响API请求`);
+          ElMessage.warning(`本地时间与${status.source === 'binance' ? '币安' : ''}服务器时间偏差较大(${status.offset}毫秒)，系统已自动同步`);
+        } else {
+          ElMessage.success('时间同步成功');
         }
         
         showTimeStatus.value = true;
       } catch (error) {
         console.error('同步服务器时间失败:', error);
         ElMessage.error('同步服务器时间失败: ' + (error.message || '未知错误'));
+        
+        // 显示上次成功的同步状态（如果有）
+        const lastSync = getLastSyncTime();
+        if (lastSync) {
+          timeData.value = [
+            { name: '本地时间', value: new Date().toLocaleString() },
+            { name: '服务器时间', value: '同步失败' },
+            { name: '时间来源', value: '未知' },
+            { name: '时间偏移', value: '未知' },
+            { name: '网络延迟', value: '未知' },
+            { name: '上次同步', value: lastSync.toLocaleString() },
+            { name: '同步状态', value: '失败 - ' + (error.message || '未知错误') }
+          ];
+          showTimeStatus.value = true;
+        }
+      } finally {
+        loading.value = false;
       }
     }
     
@@ -412,8 +438,48 @@ export default {
       return str.substring(0, 4) + '****' + str.substring(str.length - 4)
     }
     
-    onMounted(() => {
-      fetchApiSettings()
+    // 设置自动同步时间的定时器（每30分钟同步一次）
+    const setupTimeSyncInterval = () => {
+      // 由于在main.js中已经初始化了全局定时器，这里不再重复设置
+      // 只更新显示
+      const lastSync = getLastSyncTime();
+      
+      if (getSyncStatus().success && lastSync) {
+        const correctedDate = getCorrectedDate();
+        const localTime = new Date().toLocaleString();
+        const serverTime = correctedDate.toLocaleString();
+        
+        timeData.value = [
+          { name: '本地时间', value: localTime },
+          { name: '服务器时间', value: serverTime },
+          { name: '时间来源', value: getSyncStatus().source === 'binance' ? '币安服务器' : '服务器(后备)' },
+          { name: '时间偏移', value: `${getSyncStatus().offset} 毫秒` },
+          { name: '网络延迟', value: `${getSyncStatus().latency || 0} 毫秒` },
+          { name: '上次同步', value: lastSync.toLocaleString() }
+        ];
+        
+        showTimeStatus.value = true;
+      }
+    }
+    
+    onMounted(async () => {
+      // 获取API设置
+      await fetchApiSettings()
+      
+      // 如果已存在同步状态，显示它；否则进行同步
+      const lastSync = getLastSyncTime();
+      if (lastSync) {
+        setupTimeSyncInterval();
+      } else {
+        await syncServerTime();
+      }
+    })
+    
+    // 组件卸载时清除定时器
+    onUnmounted(() => {
+      if (syncInterval.value) {
+        clearInterval(syncInterval.value)
+      }
     })
     
     return {
@@ -428,7 +494,8 @@ export default {
       saveSettings,
       clearSettings,
       syncServerTime,
-      apiFormRef
+      apiFormRef,
+      lastSyncTime
     }
   }
 }

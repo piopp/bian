@@ -15,17 +15,17 @@ class Config:
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or 'jwt-secret-key'
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
     
-    # 日志配置
-    LOG_LEVEL = logging.INFO
+    # 日志配置 - 提高级别以减少日志输出
+    LOG_LEVEL = logging.WARNING  # 由INFO改为WARNING
     LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     LOG_FILE = 'app.log'
     
-    # API日志配置
-    API_LOG_LEVEL = logging.DEBUG
+    # API日志配置 - 提高级别以减少日志输出
+    API_LOG_LEVEL = logging.WARNING  # 由DEBUG改为WARNING
     API_LOG_FILE = 'api_requests.log'
     
-    # WebSocket日志配置
-    WS_LOG_LEVEL = logging.DEBUG
+    # WebSocket日志配置 - 提高级别以减少日志输出
+    WS_LOG_LEVEL = logging.WARNING  # 由DEBUG改为WARNING
     WS_LOG_FILE = 'websocket.log'
     
     # 币安API配置
@@ -74,16 +74,14 @@ class Config:
         websocket_logger.addHandler(websocket_handler)
         websocket_logger.propagate = False  # 避免日志重复
         
-        # 打印代理设置信息
+        # 打印代理设置信息只在ERROR以上级别
         if Config.BINANCE_PROXY:
-            app.logger.info(f"使用代理访问币安API: {Config.BINANCE_PROXY}")
-        else:
-            app.logger.info("未设置代理，将直接访问币安API")
+            app.logger.error(f"使用代理访问币安API: {Config.BINANCE_PROXY}")
         
 class DevelopmentConfig(Config):
     """开发环境配置"""
     DEBUG = True
-    LOG_LEVEL = logging.DEBUG
+    LOG_LEVEL = logging.WARNING  # 由DEBUG改为WARNING
     
 class TestingConfig(Config):
     """测试环境配置"""
@@ -91,7 +89,7 @@ class TestingConfig(Config):
     
 class ProductionConfig(Config):
     """生产环境配置"""
-    LOG_LEVEL = logging.WARNING
+    LOG_LEVEL = logging.ERROR  # 由WARNING改为ERROR
     
 config = {
     'development': DevelopmentConfig,

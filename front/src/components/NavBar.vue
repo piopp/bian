@@ -18,10 +18,21 @@
       <template v-if="isLoggedIn">
         <el-menu-item index="4">API设置</el-menu-item>
         <el-menu-item index="6">子账户管理</el-menu-item>
-        <el-menu-item index="7">批量子账户</el-menu-item>
+        <el-menu-item index="/trading-center">
+          <el-icon><Money /></el-icon>
+          <span>交易中心</span>
+        </el-menu-item>
+        <el-menu-item index="/leverage-market">
+          <el-icon><Coin /></el-icon>
+          <span>杠杆交易市场</span>
+        </el-menu-item>
         <el-menu-item index="/trading-pairs">
           <el-icon><Money /></el-icon>
           <span>交易对管理</span>
+        </el-menu-item>
+        <el-menu-item index="/fee-management">
+          <el-icon><data-analysis /></el-icon>
+          <span>手续费管理</span>
         </el-menu-item>
         <el-sub-menu index="user">
           <template #title>
@@ -47,18 +58,21 @@
 <script>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { House, User, SwitchButton, Key, Money } from '@element-plus/icons-vue'
+import { House, User, SwitchButton, Key, Money, Coin, DataAnalysis } from '@element-plus/icons-vue'
 import { logout, getCurrentUser, isAuthenticated } from '../services/auth.js'
 import { ElMessage } from 'element-plus'
 
 export default {
   name: 'NavBarComponent',
+  // eslint-disable-next-line vue/no-unused-components
   components: {
     House,
     User,
     SwitchButton,
     Key,
-    Money
+    Money,
+    Coin,
+    DataAnalysis
   },
   setup() {
     const activeIndex = ref('1')
@@ -120,15 +134,25 @@ export default {
           console.log('正在导航到子账户管理页面');
           router.push('/sub-accounts');
           break;
-        case '7':
-          // 批量子账户页面
-          console.log('正在导航到批量子账户页面');
-          router.push('/batch-subaccount');
-          break;
         case '/trading-pairs':
           // 交易对管理页面
           console.log('正在导航到交易对管理页面');
           router.push('/trading-pairs');
+          break;
+        case '/trading-center':
+          // 交易中心页面
+          console.log('正在导航到交易中心页面');
+          router.push('/trading-center');
+          break;
+        case '/leverage-market':
+          // 杠杆交易市场页面
+          console.log('正在导航到杠杆交易市场页面');
+          router.push('/leverage-market');
+          break;
+        case '/fee-management':
+          // 手续费管理页面
+          console.log('正在导航到手续费管理页面');
+          router.push('/fee-management');
           break;
         default:
           console.log('未知的菜单项:', key);

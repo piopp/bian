@@ -196,26 +196,35 @@ def delete_setting(key):
 @settings_bp.route('/api-keys/<string:user_id>', methods=['GET'])
 def get_api_key(user_id):
     """获取指定用户ID的API密钥信息"""
-    print(f"获取指定用户ID的API密钥信息: {user_id}")
+    logger.info(f"获取指定用户ID的API密钥信息: {user_id}")
     try:
         # 检查user_id是否为有效的整数
         try:
             user_id_int = int(user_id)
-            print(f"转换后的用户ID: {user_id_int}")
+            logger.info(f"转换后的用户ID: {user_id_int}")
         except ValueError as e:
-            print(f"用户ID转换失败: {e}")
+            logger.error(f"用户ID转换失败: {e}")
             return jsonify({
                 'success': False,
                 'error': f'无效的用户ID: {user_id}'
             }), 400
 
+        # 检查用户是否存在
+        user = User.query.get(user_id_int)
+        if not user:
+            logger.error(f"用户ID {user_id_int} 不存在")
+            return jsonify({
+                'success': False,
+                'error': f'用户ID {user_id_int} 不存在'
+            }), 404
+
         # 直接使用导入的APIKey模型
         try:
-            print(f"开始查询APIKey，用户ID: {user_id_int}")
+            logger.info(f"开始查询APIKey，用户ID: {user_id_int}")
             # 添加错误处理,避免datetime格式问题
             try:
                 api_key = APIKey.query.filter_by(user_id=user_id_int, is_active=True).first()
-                print(f"API密钥信息: {api_key}")
+                logger.info(f"API密钥信息: {api_key}")
             except TypeError as e:
                 # 记录详细错误
                 logger.error(f"查询API密钥时发生TypeError: {str(e)}")
@@ -225,16 +234,17 @@ def get_api_key(user_id):
                     db.select(APIKey).filter_by(user_id=user_id_int, is_active=True).limit(1)
                 ).first()
                 api_key = api_key_data[0] if api_key_data else None
-                print(f"安全方式查询到的API密钥信息: {api_key}")
+                logger.info(f"安全方式查询到的API密钥信息: {api_key}")
         except SQLAlchemyError as e:
-            print(f"SQL查询错误: {str(e)}")
-            print(traceback.format_exc())
+            logger.error(f"SQL查询错误: {str(e)}")
+            logger.error(traceback.format_exc())
             return jsonify({
                 'success': False,
                 'error': f'数据库查询错误: {str(e)}'
             }), 500
         
         if api_key:
+            logger.info(f"找到用户 {user_id_int} 的API密钥")
             return jsonify({
                 'success': True,
                 'data': {
@@ -245,6 +255,7 @@ def get_api_key(user_id):
                 }
             })
         else:
+            logger.info(f"未找到用户 {user_id_int} 的API密钥")
             return jsonify({
                 'success': True,
                 'data': {
@@ -255,9 +266,8 @@ def get_api_key(user_id):
                 }
             })
     except Exception as e:
-        print(f"获取API密钥错误: {str(e)}")
-        print(traceback.format_exc())
-        logger.error(f"获取API密钥信息失败: {str(e)}")
+        logger.error(f"获取API密钥错误: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': f'获取API密钥信息失败: {str(e)}'

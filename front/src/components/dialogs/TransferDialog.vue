@@ -64,9 +64,8 @@
 </template>
 
 <script>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getCurrentUser } from '../../services/auth'
 
 export default {
   name: 'TransferDialog',
@@ -80,12 +79,13 @@ export default {
       default: null
     }
   },
+  emits: ['update:visible', 'success'],
   setup(props, { emit }) {
     // 表单引用
     const formRef = ref(null)
     // 加载状态
     const loading = ref(false)
-    // 可用余额 (模拟)
+    // 可用余额
     const availableBalance = ref('0.00')
     
     // 计算属性: 对话框可见性
@@ -140,49 +140,82 @@ export default {
       ]
     }
     
+    // 监听对话框打开
+    watch(() => props.visible, (newVal) => {
+      if (newVal && props.account) {
+        // 清空表单
+        if (formRef.value) {
+          formRef.value.resetFields()
+        }
+        // 查询余额
+        fetchAvailableBalance()
+      }
+    })
+    
     // 监听币种变化，更新可用余额
     watch(() => form.value.asset, () => {
       fetchAvailableBalance()
     })
     
+    // 监听转账方向变化，更新可用余额
+    watch(() => form.value.direction, () => {
+      fetchAvailableBalance()
+    })
+    
     // 查询可用余额
     const fetchAvailableBalance = async () => {
+      if (!props.account) return
+      
       try {
-        // 获取当前用户ID
-        const currentUser = getCurrentUser();
-        const userId = currentUser ? currentUser.userId || currentUser.id : '';
+        // 构建查询参数
+        const params = new URLSearchParams({
+          asset: form.value.asset,
+          direction: form.value.direction,
+          email: props.account.email
+        })
         
-        // 实际调用API获取余额
-        const response = await fetch(`/api/misc/balance?asset=${form.value.asset}&direction=${form.value.direction}&id=${userId}`);
-        const result = await response.json();
+        // 请求API获取余额
+        const response = await fetch(`/api/misc/balance?${params.toString()}`)
+        const result = await response.json()
         
         if (result.success) {
-          availableBalance.value = result.data?.available || '0.00';
+          availableBalance.value = result.data?.available || '0.00'
         } else {
-          availableBalance.value = '0.00';
-          console.error('获取余额失败:', result.error);
+          availableBalance.value = '0.00'
+          console.error('获取余额失败:', result.error)
         }
       } catch (error) {
-        console.error('获取余额失败:', error);
-        availableBalance.value = '0.00';
+        console.error('获取余额请求异常:', error)
+        availableBalance.value = '0.00'
       }
     }
     
-    // 获取状态样式和文字
+    // 获取状态样式
     const getStatusType = (status) => {
+      if (!status) return 'info'
+      
       const statusMap = {
         'ACTIVE': 'success',
+        'active': 'success',
         'DISABLED': 'danger',
-        'PENDING': 'warning'
+        'disabled': 'danger',
+        'PENDING': 'warning',
+        'pending': 'warning'
       }
       return statusMap[status] || 'info'
     }
     
+    // 获取状态文本
     const getStatusText = (status) => {
+      if (!status) return '未知'
+      
       const statusMap = {
         'ACTIVE': '活跃',
+        'active': '活跃',
         'DISABLED': '已禁用',
-        'PENDING': '待激活'
+        'disabled': '已禁用',
+        'PENDING': '待激活',
+        'pending': '待激活'
       }
       return statusMap[status] || status
     }
@@ -190,9 +223,7 @@ export default {
     // 转账方法
     const transferAsset = () => {
       formRef.value.validate(async (valid) => {
-        if (!valid) {
-          return false
-        }
+        if (!valid) return
         
         try {
           // 二次确认
@@ -208,77 +239,70 @@ export default {
           
           loading.value = true
           
-          // 获取服务器时间
-          let serverTimestamp = Date.now(); // 默认使用本地时间
-          try {
-            const response = await fetch('/api/server_time');
-            if (response.ok) {
-              const data = await response.json();
-              if (data && data.server_time) {
-                serverTimestamp = data.server_time;
-              }
-            }
-          } catch (error) {
-            console.error('获取服务器时间失败，将使用本地时间:', error);
-          }
-          
           // 构建请求数据
           const requestData = {
-            email: props.account.email,
-            asset: form.value.asset,
-            amount: form.value.amount,
-            transferType: form.value.direction === 'toSubAccount' ? 'TO_SUBACCOUNT' : 'FROM_SUBACCOUNT',
-            timestamp: serverTimestamp
-          };
+            transfers: [
+              {
+                email: props.account.email,
+                asset: form.value.asset,
+                amount: form.value.amount,
+                transferType: form.value.direction === 'toSubAccount' ? 'TO_SUBACCOUNT' : 'FROM_SUBACCOUNT'
+              }
+            ]
+          }
           
-          // 实际调用API执行转账
-          const response = await fetch('/api/subaccounts/transfer', {
+          // 调用API执行转账
+          const response = await fetch('/api/subaccounts/batch-transfer', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestData)
-          });
+          })
           
-          const result = await response.json();
+          const result = await response.json()
           
           if (result.success) {
             // 关闭对话框并清空表单
-            dialogVisible.value = false;
-            formRef.value.resetFields();
+            dialogVisible.value = false
+            formRef.value.resetFields()
             
             // 触发成功事件
             emit('success', {
               email: props.account.email,
               asset: form.value.asset,
               amount: form.value.amount,
-              direction: form.value.direction,
-              txId: result.data?.txId || ''
-            });
+              direction: form.value.direction
+            })
             
-            ElMessage.success(`转账操作已成功执行`);
+            ElMessage.success('转账成功')
           } else {
-            ElMessage.error(result.error || '转账操作失败，请重试');
+            ElMessage.error(result.error || '转账失败，请重试')
           }
         } catch (error) {
-          if (error === 'cancel') return;
-          console.error('转账操作失败:', error);
-          ElMessage.error('转账操作失败，请检查网络连接');
+          if (error === 'cancel') return
+          
+          console.error('转账请求异常:', error)
+          ElMessage.error('转账异常: ' + (error.message || '未知错误'))
         } finally {
-          loading.value = false;
+          loading.value = false
         }
-      });
+      })
     }
     
-    // 初始化
-    fetchAvailableBalance()
+    // 组件挂载时执行
+    onMounted(() => {
+      if (props.visible && props.account) {
+        fetchAvailableBalance()
+      }
+    })
     
     return {
       formRef,
-      loading,
       dialogVisible,
       form,
       rules,
-      commonCoins,
+      loading,
       availableBalance,
+      commonCoins,
       getStatusType,
       getStatusText,
       transferAsset
@@ -289,25 +313,30 @@ export default {
 
 <style scoped>
 .account-info {
-  background-color: #f8f9fa;
-  padding: 15px;
-  border-radius: 5px;
-  margin-bottom: 15px;
+  margin-bottom: 20px;
 }
 
 .account-info p {
-  margin: 5px 0;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+}
+
+.account-info strong {
+  display: inline-block;
+  width: 80px;
 }
 
 .form-tip {
-  font-size: 12px;
   color: #909399;
-  line-height: 1.2;
+  font-size: 12px;
   margin-top: 4px;
+  text-align: right;
 }
 
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
 }
 </style> 

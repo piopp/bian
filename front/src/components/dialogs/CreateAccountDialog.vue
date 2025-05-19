@@ -49,6 +49,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useUserStore } from '@/stores/userStore'
 
 export default {
   name: 'CreateAccountDialog',
@@ -64,6 +65,9 @@ export default {
     const formRef = ref(null)
     // 加载状态
     const loading = ref(false)
+    
+    // 获取主账号store
+    const userStore = useUserStore()
     
     // 计算属性: 对话框可见性
     const dialogVisible = computed({
@@ -99,6 +103,32 @@ export default {
         try {
           loading.value = true
           
+          // 获取用户信息
+          let userId = null;
+          let currentUser = null;
+          
+          // 优先从userStore获取主账号ID
+          if (userStore.hasMainAccount) {
+            userId = userStore.mainAccountId;
+            console.log('从userStore获取到主账号ID:', userId);
+          } else {
+            // 尝试从auth服务获取
+            try {
+              currentUser = await import('@/services/auth').then(module => module.getCurrentUser());
+              if (currentUser && currentUser.id) {
+                userId = currentUser.id;
+                console.log('从auth服务获取到用户ID:', userId);
+                
+                // 将ID保存到store中
+                userStore.setMainAccount(userId, currentUser.email || currentUser.username || '');
+              } else {
+                console.warn('未能获取用户ID，将使用默认值');
+              }
+            } catch (error) {
+              console.error('获取用户信息失败:', error);
+            }
+          }
+          
           // 获取服务器时间
           let serverTimestamp = Date.now(); // 默认使用本地时间
           try {
@@ -118,13 +148,24 @@ export default {
             subaccount_name: form.value.prefix, // 子账号名称
             accountType: form.value.accountType, // 账号类型
             features: form.value.features, // 需要开通的功能
-            timestamp: serverTimestamp
+            timestamp: serverTimestamp,
+            user_id: userId // 添加用户ID参数
           };
+          
+          console.log('发送创建子账号请求，数据:', requestData);
+          
+          // 如果currentUser不存在，重新获取
+          if (!currentUser) {
+            currentUser = await import('@/services/auth').then(module => module.getCurrentUser());
+          }
           
           // 实际调用API创建子账号
           const response = await fetch('/api/subaccounts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${currentUser?.token || ''}` // 添加授权头
+            },
             body: JSON.stringify(requestData)
           });
           

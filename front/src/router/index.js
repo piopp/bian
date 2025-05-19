@@ -4,8 +4,10 @@ import { isAuthenticated } from '../services/auth'
 import ApiSettings from '../components/ApiSettings.vue'
 import LoginPage from '../components/LoginPage.vue'
 import SubAccountManage from '../components/SubAccountManage.vue'
-import BatchSubAccount from '../views/BatchSubAccount.vue'
 import TradingPairsView from '../views/TradingPairsView.vue'
+import LeverageMarketView from '../views/LeverageMarketView.vue'
+import FeeManagementView from '../views/FeeManagementView.vue'
+import TradingCenter from '../views/TradingCenter.vue'
 
 const routes = [
   {
@@ -27,15 +29,28 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/batch-subaccount',
-    component: BatchSubAccount,
-    meta: { requiresAuth: true }
-  },
-  {
     path: '/trading-pairs',
     name: 'TradingPairs',
     component: TradingPairsView,
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/leverage-market',
+    name: 'LeverageMarket',
+    component: LeverageMarketView,
+    meta: { requiresAuth: true, title: '杠杆市场交易' }
+  },
+  {
+    path: '/fee-management',
+    name: 'FeeManagement',
+    component: FeeManagementView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/trading-center',
+    name: 'TradingCenter',
+    component: TradingCenter,
+    meta: { requiresAuth: true, title: '交易中心' }
   },
   // 可以在这里添加更多路由
 ]

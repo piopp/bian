@@ -11,5 +11,14 @@ module.exports = defineConfig({
         // pathRewrite: { '^/api': '' }
       }
     }
+  },
+  chainWebpack: config => {
+    config.module
+      .rule('js')
+      .use('babel-loader')
+      .tap(options => {
+        options.cacheDirectory = false;
+        return options;
+      });
   }
 })

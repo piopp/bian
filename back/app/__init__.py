@@ -4,10 +4,11 @@ from flask import Flask
 from flask_cors import CORS
 from app.models import db
 from loguru import logger
+from flask_jwt_extended import JWTManager
 
-# 配置日志
+# 配置日志 - 在开发环境使用更详细的日志级别
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # 从WARNING改为DEBUG以获取更多调试信息
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -29,6 +30,16 @@ def create_app(config_class=None):
     app.config['SESSION_TYPE'] = 'filesystem'
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SECURE'] = False  # 在开发环境中设为False，生产环境应设为True
+    
+    # 配置JWT扩展
+    app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'binance_manager_jwt_secret')
+    app.config['JWT_TOKEN_LOCATION'] = ['headers']
+    app.config['JWT_HEADER_NAME'] = 'Authorization'
+    app.config['JWT_HEADER_TYPE'] = 'Bearer'
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 24*60*60  # 24小时
+    
+    # 初始化JWT
+    jwt = JWTManager(app)
     
     # 配置数据目录
     data_dir = os.environ.get('DATA_DIR')
@@ -80,6 +91,18 @@ def create_app(config_class=None):
             "version": "1.0.0"
         })
     
+    # 在开发环境中启用调试工具栏
+    if app.config.get('ENV') == 'development' or app.config.get('DEBUG'):
+        try:
+            from flask_debugtoolbar import DebugToolbarExtension
+            app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
+            app.config['DEBUG_TB_PROFILER_ENABLED'] = True
+            app.config['DEBUG_TB_TEMPLATE_EDITOR_ENABLED'] = True
+            toolbar = DebugToolbarExtension(app)
+            logger.info("已启用Flask调试工具栏")
+        except ImportError:
+            logger.warning("未安装flask-debugtoolbar，跳过调试工具栏初始化")
+    
     # 注册异常处理
     @app.errorhandler(404)
     def page_not_found(e):
@@ -91,6 +114,10 @@ def create_app(config_class=None):
         logger.exception("未处理的异常: %s", str(e))
         from flask import jsonify
         return jsonify({"success": False, "error": f"服务器错误: {str(e)}"}), 500
+    
+    # 输出启动信息
+    logger.info(f"应用已启动，环境: {os.environ.get('FLASK_ENV', '未设置')}")
+    logger.debug(f"调试模式: {app.debug}")
     
     return app
  

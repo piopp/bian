@@ -7,9 +7,9 @@ import logging
 from flask import Flask
 from app.models import db
 
-# 配置日志
+# 配置日志 - 提高级别以减少日志输出
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # 从INFO改为WARNING
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def init_db():
     # 在应用上下文中创建所有表
     with app.app_context():
         db.create_all()
-        logger.info('数据库表创建成功！')
+        logger.warning('数据库表创建成功！')  # 从info改为warning
 
 if __name__ == '__main__':
     init_db() 

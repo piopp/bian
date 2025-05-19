@@ -22,3 +22,9 @@ npm run lint
 
 ### Customize configuration
 See [Configuration Reference](https://cli.vuejs.org/config/).
+
+cd /d G:\Download\binance_withdraw_py-main\front\
+npm run serve
+cd G:\Download\binance_withdraw_py-main\back\
+conda activate binance_mgmt
+python run.py

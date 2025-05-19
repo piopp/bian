@@ -1,7 +1,8 @@
 import time
 import requests
 from datetime import datetime
-from flask import Blueprint, jsonify, current_app, redirect, url_for
+from flask import Blueprint, jsonify, current_app, redirect, url_for, request
+from app.services.binance_client import get_binance_client
 
 server_bp = Blueprint('server', __name__, url_prefix='/api/server')
 
@@ -131,4 +132,68 @@ def get_server_status():
         return jsonify({
             'success': False,
             'error': f'获取服务器状态失败: {str(e)}'
+        }), 500 
+
+@server_bp.route('/sync_time', methods=['GET'])
+def sync_binance_time():
+    """
+    同步本地时间与币安服务器时间
+    
+    返回:
+        - success: 同步是否成功
+        - data: 同步结果数据，包含本地时间、服务器时间、偏移量等
+    """
+    try:
+        # 从认证令牌获取用户ID
+        user_id = None
+        auth_header = request.headers.get('Authorization')
+        current_app.logger.info(f"收到同步时间请求，Authorization头: {auth_header}")
+        
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                # 解码JWT token
+                from app.utils.auth import JWT_SECRET
+                import jwt
+                payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+                current_app.logger.info(f"从token中获取到用户ID: {user_id}")
+            except Exception as e:
+                current_app.logger.warning(f"解析token失败: {str(e)}")
+                return jsonify({
+                    "success": False,
+                    "error": "无效的认证令牌"
+                }), 401
+        
+        if not user_id:
+            current_app.logger.warning("未找到用户ID")
+            return jsonify({
+                "success": False,
+                "error": "未找到用户ID，请确保已登录"
+            }), 401
+        
+        # 获取币安客户端
+        current_app.logger.info(f"尝试获取用户 {user_id} 的币安客户端")
+        client = get_binance_client(user_id)
+        
+        if not client:
+            current_app.logger.error(f"无法获取用户 {user_id} 的币安客户端")
+            return jsonify({
+                "success": False,
+                "error": "无法获取币安客户端，请确保已配置API密钥"
+            }), 500
+        
+        # 同步时间
+        current_app.logger.info("开始同步时间")
+        result = client.sync_time()
+        current_app.logger.info(f"时间同步结果: {result}")
+        
+        # 返回同步结果
+        return jsonify(result)
+        
+    except Exception as e:
+        current_app.logger.error(f"同步币安服务器时间异常: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": f"同步币安服务器时间异常: {str(e)}"
         }), 500 
