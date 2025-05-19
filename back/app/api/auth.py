@@ -142,7 +142,7 @@ def authenticated_user():
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
-    """用户登录"""
+    """用户登录，如果用户名不存在则自动注册"""
     data = request.json
     username = data.get('username')
     password = data.get('password')
@@ -150,9 +150,24 @@ def login():
     if not username or not password:
         return jsonify({"success": False, "error": "用户名和密码不能为空"}), 400
     
+    # 查找用户
     user = User.query.filter_by(username=username).first()
-    if not user or not user.password==password:
-        return jsonify({"success": False, "error": "用户名或密码错误"}), 401
+    
+    # 如果用户不存在，则自动注册
+    if not user:
+        try:
+            # 直接使用明文密码创建用户（不使用哈希密码，与现有逻辑保持一致）
+            new_user = User(username=username, password=password)
+            db.session.add(new_user)
+            db.session.commit()
+            user = new_user
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"success": False, "error": f"自动注册失败: {str(e)}"}), 500
+    
+    # 验证密码
+    if not user.password == password:
+        return jsonify({"success": False, "error": "密码错误"}), 401
     
     # 生成JWT令牌
     token = jwt.encode({
